@@ -1,0 +1,67 @@
+{
+  "id": "winecx-24.0.7_7-dxmt-0.80-r1",
+  "wine": "wswine.bundle/bin/wine",
+  "library_dir": "lib",
+  "components": [
+    {
+      "name": "WineCX 24.0.7_7 (Sikarugir Engines)",
+      "url": "https://github.com/Sikarugir-App/Engines/releases/download/v1.0/WS12WineCX24.0.7_7.tar.xz",
+      "sha256": "203f9e9fd6c2cc77e6525d798a434ced326145db34a356355e05659d3445fd1c",
+      "size": 172348356,
+      "extract": "all"
+    },
+    {
+      "name": "DXMT 0.80 (Direct3D 11 to Metal)",
+      "url": "https://github.com/3Shain/dxmt/releases/download/v0.80/dxmt-v0.80-builtin.tar.gz",
+      "sha256": "8f260e36b5739e68f3bad613381441385c4dc7b85b78ba8de653d5a6a264529d",
+      "size": 18681669,
+      "extract": "map",
+      "files": [
+        { "from": "v0.80/x86_64-windows/d3d10core.dll", "to": "wswine.bundle/lib/wine/x86_64-windows/d3d10core.dll" },
+        { "from": "v0.80/x86_64-windows/d3d11.dll", "to": "wswine.bundle/lib/wine/x86_64-windows/d3d11.dll" },
+        { "from": "v0.80/x86_64-windows/dxgi.dll", "to": "wswine.bundle/lib/wine/x86_64-windows/dxgi.dll" },
+        { "from": "v0.80/x86_64-windows/winemetal.dll", "to": "wswine.bundle/lib/wine/x86_64-windows/winemetal.dll" },
+        { "from": "v0.80/i386-windows/d3d10core.dll", "to": "wswine.bundle/lib/wine/i386-windows/d3d10core.dll" },
+        { "from": "v0.80/i386-windows/d3d11.dll", "to": "wswine.bundle/lib/wine/i386-windows/d3d11.dll" },
+        { "from": "v0.80/i386-windows/dxgi.dll", "to": "wswine.bundle/lib/wine/i386-windows/dxgi.dll" },
+        { "from": "v0.80/i386-windows/winemetal.dll", "to": "wswine.bundle/lib/wine/i386-windows/winemetal.dll" },
+        { "from": "v0.80/x86_64-unix/winemetal.so", "to": "wswine.bundle/lib/wine/x86_64-unix/winemetal.so" }
+      ]
+    },
+    {
+      "name": "Support libraries from Wine Stable 11.0_1 (Gcenx)",
+      "url": "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.0_1/wine-stable-11.0_1-osx64.tar.xz",
+      "sha256": "b50dc50ec7f41d58b115a6b685d4d1315ba3c797bd3aa0f49213f2703cb82388",
+      "size": 185303032,
+      "extract": "map",
+      "members": ["Wine Stable.app/Contents/Resources/wine/lib"],
+      "from_dir": "Wine Stable.app/Contents/Resources/wine/lib",
+      "to_dir": "lib",
+      "names": [
+        "libMacportsLegacySupport.dylib",
+        "libMoltenVK.dylib",
+        "libSDL2-2.0.0.dylib",
+        "libbrotlicommon.1.dylib",
+        "libbrotlidec.1.dylib",
+        "libbrotlienc.1.dylib",
+        "libbz2.1.0.dylib",
+        "libffi.8.dylib",
+        "libfreetype.6.dylib",
+        "libgmp.10.dylib",
+        "libgnutls.30.dylib",
+        "libhogweed.6.dylib",
+        "libiconv.2.dylib",
+        "libidn2.0.dylib",
+        "libinotify.0.dylib",
+        "libintl.8.dylib",
+        "libnettle.8.dylib",
+        "libp11-kit.0.dylib",
+        "libpng16.16.dylib",
+        "libtasn1.6.dylib",
+        "libunistring.5.dylib",
+        "libz.1.dylib",
+        "libzstd.1.dylib"
+      ]
+    }
+  ]
+}

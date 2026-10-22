@@ -1,0 +1,17 @@
+[package]
+name = "rhl-cli"
+description = "Command-line front end for testing the Runehaven Launcher core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "rhl"
+path = "src/main.rs"
+
+[dependencies]
+rhl-core = { path = "../rhl-core" }
+clap = { version = "4", features = ["derive"] }
+ctrlc = "3"
+serde_json.workspace = true

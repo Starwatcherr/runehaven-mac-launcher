@@ -1,0 +1,12 @@
+/target
+.DS_Store
+*.log
+/.sync
+/inputfix/build
+/macfix/build
+HANDOFF.md
+/drafts
+
+# own DXMT build tree and generated binaries (shelved, see dxmt/patches)
+/dxmt-build
+*.a
