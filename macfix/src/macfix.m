@@ -45,7 +45,9 @@ static int ticks;
 static int ready_ticks;                    /* consecutive checks the window qualified */
 static volatile int finished;
 
-void rml_test_control_start(void); /* testcontrol.m, development only */
+#ifdef RML_TEST_CONTROL
+void rml_test_control_start(void); /* testcontrol.m, development builds only */
+#endif
 
 static void rml_log(const char *msg) {
     fprintf(stderr, "[rml-macfix] %d: %s\n", getpid(), msg);
@@ -214,7 +216,9 @@ static void start_watching(void) {
      * processes are left alone. */
     const char *only = getenv("RML_GAME_PROCESS");
     if (only && *only && strcasecmp(getprogname(), only) != 0) return;
-    rml_test_control_start(); /* development only, see testcontrol.m */
+#ifdef RML_TEST_CONTROL
+    rml_test_control_start(); /* development builds only, see testcontrol.m */
+#endif
     want_fullscreen = env_on("RML_FULLSCREEN", 0);
     want_cursor = env_on("RML_CURSOR_FIX", 1);
     if (!want_fullscreen && !want_cursor) return;

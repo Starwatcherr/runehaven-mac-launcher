@@ -1,5 +1,6 @@
 /*
- * RML test control – DEVELOPMENT ONLY, REMOVE BEFORE BUILDING THE APP.
+ * RML test control – DEVELOPMENT ONLY. Compiled in only by
+ * `RML_DEV=1 ./build.sh`; the normal build leaves this file out.
  *
  * Lets a developer (or an assistant on the developer's Mac) drive the game
  * during tests: clicks, key presses and screenshots of the game window. It is
