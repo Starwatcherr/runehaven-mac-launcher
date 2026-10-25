@@ -22,6 +22,14 @@ fn output(cmd: &str, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Whether Intel programs run, i.e. Rosetta 2 is installed.
+pub fn rosetta_installed() -> bool {
+    Command::new("/usr/bin/arch")
+        .args(["-x86_64", "/usr/bin/true"])
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// Checks that need no running Steam.
 pub fn run() -> Vec<Check> {
     let mut checks = Vec::new();
@@ -43,10 +51,7 @@ pub fn run() -> Vec<Check> {
         detail: version.unwrap_or_else(|| "unknown".into()),
     });
 
-    let rosetta = Command::new("/usr/bin/arch")
-        .args(["-x86_64", "/usr/bin/true"])
-        .status()
-        .is_ok_and(|s| s.success());
+    let rosetta = rosetta_installed();
     checks.push(Check {
         name: "Rosetta 2",
         ok: Some(rosetta),

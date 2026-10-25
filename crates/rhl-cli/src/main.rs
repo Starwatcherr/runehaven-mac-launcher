@@ -348,51 +348,16 @@ fn game_cmd(command: GameCmd, launcher: &LauncherPaths) -> Result<()> {
             Ok(())
         }
         GameCmd::Launch { dry_run, force, game_args } => {
-            let mut config = Config::load(&launcher.config_file())?;
-            // Without explicit paths, use the helper files shipped with the
-            // launcher (next to the program or in the app's Resources folder).
-            if config.inputfix_dll.is_none() {
-                config.inputfix_dll = bundled_file("version.dll");
-            }
-            if config.macfix_dylib.is_none() {
-                config.macfix_dylib = bundled_file("rml-macfix.dylib");
-            }
-            let paths = rhl_core::paths::SteamPaths::detect()?;
-            let libs = library::libraries(&paths)?;
-            let (lib, manifest) =
-                library::find_app(&libs, RUNEHAVEN_APPID)?.ok_or(Error::GameNotInstalled)?;
-            if !manifest.is_ready() && !force {
-                return Err(Error::Config(
-                    "Steam reports that Runehaven is updating or needs an update. Let Steam finish, or pass --force.".into(),
-                ));
-            }
-            let game_dir = lib.steamapps().join("common").join(&manifest.installdir);
-            let mut plan = launch::LaunchPlan::build(&config, launcher, &game_dir)?;
+            let (config, mut plan) = launch::prepare(launcher, force).map_err(|e| match e {
+                Error::GameNeedsUpdate => Error::Config(format!("{e} Or pass --force.")),
+                e => e,
+            })?;
             plan.args.extend(game_args);
             if dry_run {
                 println!("{}", plan.describe());
                 return Ok(());
             }
-            ensure_prefix(&config, launcher)?;
-            let rt = launch::ResolvedRuntime::resolve(&config, launcher)?;
-            if prefix::ensure_retina(
-                &rt.wine,
-                &rt.library_path(),
-                &plan.prefix,
-                config.display.retina,
-                &launcher.logs().join("wine-settings.log"),
-            )? {
-                eprintln!(
-                    "Retina mode {}.",
-                    if config.display.retina { "on" } else { "off" }
-                );
-            }
-            if let Some(dll) = &config.inputfix_dll {
-                if launch::ensure_inputfix(dll, &game_dir)? {
-                    eprintln!("Placed the input fix next to the game.");
-                }
-            }
-            let (mut child, lock) = launch::spawn(&plan, launcher)?;
+            let (mut child, lock) = launch::start(&config, &plan, launcher, &mut print_start_event)?;
             eprintln!(
                 "Runehaven started (Wine pid {}). Logs:\n  {}\n  {}",
                 child.id(),
@@ -410,26 +375,22 @@ fn game_cmd(command: GameCmd, launcher: &LauncherPaths) -> Result<()> {
     }
 }
 
-fn ensure_prefix(config: &Config, launcher: &LauncherPaths) -> Result<()> {
-    let prefix = launch::prefix_path(config, launcher);
-    if prefix::is_initialized(&prefix) {
-        return Ok(());
+fn print_start_event(event: launch::StartEvent) {
+    match event {
+        launch::StartEvent::SettingUpPrefix { prefix } => eprintln!(
+            "Setting up the Wine prefix at {} (first start only, about a minute) …",
+            prefix.display()
+        ),
+        launch::StartEvent::PrefixReady => eprintln!("Wine prefix ready."),
+        launch::StartEvent::RetinaChanged { on } => {
+            eprintln!("Retina mode {}.", if on { "on" } else { "off" })
+        }
+        launch::StartEvent::InputFixPlaced => eprintln!("Placed the input fix next to the game."),
     }
-    let rt = launch::ResolvedRuntime::resolve(config, launcher)?;
-    eprintln!(
-        "Setting up the Wine prefix at {} (first start only, about a minute) …",
-        prefix.display()
-    );
-    let log = launcher.logs().join("wineboot.log");
-    prefix::init(
-        &rt.wine,
-        &rt.library_path(),
-        &prefix,
-        &log,
-        std::time::Duration::from_secs(300),
-    )?;
-    eprintln!("Wine prefix ready.");
-    Ok(())
+}
+
+fn ensure_prefix(config: &Config, launcher: &LauncherPaths) -> Result<()> {
+    launch::ensure_prefix(config, launcher, &mut print_start_event)
 }
 
 fn runtime_cmd(command: RuntimeCmd, launcher: &LauncherPaths) -> Result<()> {
@@ -538,15 +499,6 @@ fn prefix_cmd(command: PrefixCmd, launcher: &LauncherPaths) -> Result<()> {
     }
 }
 
-/// A helper file shipped with the launcher: next to the `rhl` program or in
-/// `../Resources` (the layout inside a macOS app bundle).
-fn bundled_file(name: &str) -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    [dir.join(name), dir.join("../Resources").join(name)]
-        .into_iter()
-        .find(|p| p.is_file())
-}
 
 fn import_settings(
     from: &std::path::Path,

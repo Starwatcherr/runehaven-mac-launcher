@@ -3,15 +3,21 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::time::Duration;
+
+use serde::Serialize;
 
 use crate::config::Config;
 use crate::error::{Error, IoContext, Result};
-use crate::paths::{to_wine_path, LauncherPaths};
+use crate::paths::{to_wine_path, LauncherPaths, SteamPaths};
+use crate::prefix;
 use crate::runtime::{Runtime, RuntimeSpec};
+use crate::steam::{library, AppManifest, Library, RUNEHAVEN_APPID};
 use crate::util::utc_stamp;
 
 pub const GAME_EXE: &str = "Runehaven.exe";
 const INPUTFIX_NAME: &str = "version.dll";
+const MACFIX_NAME: &str = "rml-macfix.dylib";
 
 /// Wine DLL settings: prefer the input-fix `version.dll` next to the game,
 /// fall back to Wine's own; keep Wine from creating menu entries and from
@@ -217,6 +223,212 @@ fn pid_alive(pid: &str) -> bool {
             .is_ok_and(|s| s.success())
 }
 
+/// A helper file shipped with the launcher: next to the program or in
+/// `../Resources` (the layout inside a macOS app bundle).
+pub fn bundled_file(name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    [dir.join(name), dir.join("../Resources").join(name)]
+        .into_iter()
+        .find(|p| p.is_file())
+}
+
+/// Where Steam keeps the game: its library, manifest and game folder.
+pub fn locate_game() -> Result<(Library, AppManifest, PathBuf)> {
+    let libs = library::libraries(&SteamPaths::detect()?)?;
+    let (lib, manifest) =
+        library::find_app(&libs, RUNEHAVEN_APPID)?.ok_or(Error::GameNotInstalled)?;
+    let game_dir = lib.steamapps().join("common").join(&manifest.installdir);
+    Ok((lib, manifest, game_dir))
+}
+
+/// Loads the configuration, finds the game and builds the plan without
+/// changing anything on disk. Without explicit paths in the configuration,
+/// the helper files shipped with the launcher are used. Unless `force` is
+/// set, this refuses while Steam is updating the game.
+pub fn prepare(launcher: &LauncherPaths, force: bool) -> Result<(Config, LaunchPlan)> {
+    let mut config = Config::load(&launcher.config_file())?;
+    if config.inputfix_dll.is_none() {
+        config.inputfix_dll = bundled_file(INPUTFIX_NAME);
+    }
+    if config.macfix_dylib.is_none() {
+        config.macfix_dylib = bundled_file(MACFIX_NAME);
+    }
+    let (_, manifest, game_dir) = locate_game()?;
+    if !manifest.is_ready() && !force {
+        return Err(Error::GameNeedsUpdate);
+    }
+    let plan = LaunchPlan::build(&config, launcher, &game_dir)?;
+    Ok((config, plan))
+}
+
+/// Steps on the way to a running game, for progress messages.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(tag = "step", rename_all = "snake_case")]
+pub enum StartEvent {
+    /// First start only, takes about a minute.
+    SettingUpPrefix { prefix: PathBuf },
+    PrefixReady,
+    RetinaChanged { on: bool },
+    InputFixPlaced,
+}
+
+/// Creates the Wine prefix if it does not exist yet.
+pub fn ensure_prefix(
+    config: &Config,
+    launcher: &LauncherPaths,
+    on_event: &mut dyn FnMut(StartEvent),
+) -> Result<()> {
+    let prefix = prefix_path(config, launcher);
+    if prefix::is_initialized(&prefix) {
+        return Ok(());
+    }
+    let rt = ResolvedRuntime::resolve(config, launcher)?;
+    on_event(StartEvent::SettingUpPrefix {
+        prefix: prefix.clone(),
+    });
+    prefix::init(
+        &rt.wine,
+        &rt.library_path(),
+        &prefix,
+        &launcher.logs().join("wineboot.log"),
+        Duration::from_secs(300),
+    )?;
+    on_event(StartEvent::PrefixReady);
+    Ok(())
+}
+
+/// Puts the prefix, the Retina setting and the input fix in place and starts
+/// Wine. The caller keeps the returned child and the lock until the game exits.
+pub fn start(
+    config: &Config,
+    plan: &LaunchPlan,
+    launcher: &LauncherPaths,
+    on_event: &mut dyn FnMut(StartEvent),
+) -> Result<(Child, RunLock)> {
+    ensure_prefix(config, launcher, on_event)?;
+    let rt = ResolvedRuntime::resolve(config, launcher)?;
+    if prefix::ensure_retina(
+        &rt.wine,
+        &rt.library_path(),
+        &plan.prefix,
+        config.display.retina,
+        &launcher.logs().join("wine-settings.log"),
+    )? {
+        on_event(StartEvent::RetinaChanged {
+            on: config.display.retina,
+        });
+    }
+    if let Some(dll) = &config.inputfix_dll {
+        if ensure_inputfix(dll, &plan.game_dir)? {
+            on_event(StartEvent::InputFixPlaced);
+        }
+    }
+    spawn(plan, launcher)
+}
+
+/// Asks the game to close, like clicking the close button of its window.
+/// The game decides itself whether and how fast it quits.
+pub fn request_close(config: &Config, launcher: &LauncherPaths) -> Result<()> {
+    let rt = ResolvedRuntime::resolve(config, launcher)?;
+    // Without /f, Wine's taskkill sends the game's windows a close message.
+    run_in_prefix(config, launcher, &rt, &rt.wine, &["taskkill", "/im", GAME_EXE])
+}
+
+/// Ends every Wine process of the game's prefix at once, for a game that
+/// hangs. Unsaved progress is lost.
+pub fn force_close(config: &Config, launcher: &LauncherPaths) -> Result<()> {
+    let rt = ResolvedRuntime::resolve(config, launcher)?;
+    let wineserver = rt.wine.with_file_name("wineserver");
+    run_in_prefix(config, launcher, &rt, &wineserver, &["-k"])
+}
+
+fn run_in_prefix(
+    config: &Config,
+    launcher: &LauncherPaths,
+    rt: &ResolvedRuntime,
+    program: &Path,
+    args: &[&str],
+) -> Result<()> {
+    let status = Command::new(program)
+        .args(args)
+        .env("WINEPREFIX", prefix_path(config, launcher))
+        .env("DYLD_FALLBACK_LIBRARY_PATH", rt.library_path())
+        .env("WINEDEBUG", "-all")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .ctx(|| format!("starting {}", program.display()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::Config(format!(
+            "{} exited with {status}",
+            program.display()
+        )))
+    }
+}
+
+/// What the game's own log tells about a running game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogSignal {
+    /// The first scene is loaded, so the main menu is up.
+    Loaded,
+    /// Unity's crash handler caught a crash.
+    Crashed,
+}
+
+/// Follows the Unity log (`Player.log`) of one start while it is written.
+pub struct PlayerLogWatch {
+    path: PathBuf,
+    offset: u64,
+    /// The last line, as long as it is not complete yet.
+    partial: String,
+}
+
+impl PlayerLogWatch {
+    pub fn new(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            offset: 0,
+            partial: String::new(),
+        }
+    }
+
+    /// Reads what was added since the last call and reports what it means.
+    /// A log that does not exist yet simply has nothing new.
+    pub fn poll(&mut self) -> Vec<LogSignal> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut new = Vec::new();
+        if let Ok(mut f) = File::open(&self.path) {
+            if f.seek(SeekFrom::Start(self.offset)).is_ok() {
+                let _ = f.read_to_end(&mut new);
+            }
+        }
+        self.offset += new.len() as u64;
+        self.partial.push_str(&String::from_utf8_lossy(&new));
+        let Some(end) = self.partial.rfind('\n') else {
+            return Vec::new();
+        };
+        let complete: String = self.partial.drain(..=end).collect();
+        complete
+            .lines()
+            .filter_map(|line| {
+                // Unity writes this after loading a scene, the first time for the menu.
+                if line.starts_with("UnloadTime:") {
+                    Some(LogSignal::Loaded)
+                // Unity's crash handler marks a crash with this line.
+                } else if line.trim_end() == "Crash!!!" {
+                    Some(LogSignal::Crashed)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
 /// Starts Wine. The caller keeps the returned child and the lock until the
 /// game exits.
 pub fn spawn(plan: &LaunchPlan, launcher: &LauncherPaths) -> Result<(Child, RunLock)> {
@@ -317,6 +529,24 @@ mod tests {
             LaunchPlan::build(&config, &launcher, tmp.path()),
             Err(Error::GameNotInstalled)
         ));
+    }
+
+    #[test]
+    fn player_log_watch_reports_menu_and_crash_once() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("player.log");
+        let mut watch = PlayerLogWatch::new(&path);
+        assert!(watch.poll().is_empty(), "no log yet");
+
+        let mut log = File::create(&path).unwrap();
+        write!(log, "Initialize engine version: 6000.2.7f2\r\nUnloadTi").unwrap();
+        assert!(watch.poll().is_empty(), "a half-written line is not read yet");
+        write!(log, "me: 1.16 ms\r\nUnloadTime: 3.5 ms\r\n").unwrap();
+        assert_eq!(watch.poll(), vec![LogSignal::Loaded, LogSignal::Loaded]);
+        assert!(watch.poll().is_empty(), "nothing new");
+        write!(log, "Could not create SDK Material\nCrash!!!\n").unwrap();
+        assert_eq!(watch.poll(), vec![LogSignal::Crashed]);
     }
 
     #[test]

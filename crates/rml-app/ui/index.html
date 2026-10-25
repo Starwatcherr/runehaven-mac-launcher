@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Runehaven Mac Launcher</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <nav aria-label="Main">
+    <button aria-current="page" title="Home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 11l8-7 8 7v9H4z"/></svg></button>
+    <button title="Maintenance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 7h14M5 12h14M5 17h14"/></svg></button>
+    <button title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M10.03 4.66 L10.26 2.15 L13.74 2.15 L13.97 4.66 L15.8 5.42 L17.74 3.81 L20.19 6.26 L18.58 8.2 L19.34 10.03 L21.85 10.26 L21.85 13.74 L19.34 13.97 L18.58 15.8 L20.19 17.74 L17.74 20.19 L15.8 18.58 L13.97 19.34 L13.74 21.85 L10.26 21.85 L10.03 19.34 L8.2 18.58 L6.26 20.19 L3.81 17.74 L5.42 15.8 L4.66 13.97 L2.15 13.74 L2.15 10.26 L4.66 10.03 L5.42 8.2 L3.81 6.26 L6.26 3.81 L8.2 5.42Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    <div class="spacer"></div>
+    <button title="About"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg></button>
+  </nav>
+
+  <div id="backdrop" aria-hidden="true"></div>
+  <main>
+    <header>
+      <canvas class="rml-logo" id="rml-fire" role="img" aria-label="Runehaven Mac Launcher"></canvas>
+      <div class="names">
+        <h1 class="title">Runehaven Mac Launcher</h1>
+        <div class="by">Project by Starwatcherr. Unofficial, not affiliated with Cikoria.</div>
+      </div>
+    </header>
+
+    <section class="req" aria-labelledby="req-h">
+      <h2 id="req-h">Requirements</h2>
+      <ul id="reqs" aria-live="polite"></ul>
+    </section>
+
+    <footer>
+      <div class="left">
+        <button class="btn install frame" id="install" disabled>Checking…</button>
+      </div>
+      <div class="right">
+        <div class="note" id="note" aria-live="polite"></div>
+        <button class="btn launch frame" id="launch" disabled><span class="state" id="launch-state">Launch Game</span><span class="hover">Exit Runehaven</span></button>
+      </div>
+    </footer>
+  </main>
+</div>
+
+<div class="dialog-back" id="exit-dialog" hidden>
+  <div class="dialog frame" role="dialog" aria-modal="true" aria-labelledby="exit-h" aria-describedby="exit-text">
+    <h2 id="exit-h">Exit Runehaven?</h2>
+    <p id="exit-text">Exit Runehaven from its own menu to ensure your progress is saved.</p>
+    <div class="actions">
+      <button class="btn small frame" id="exit-cancel">Cancel</button>
+      <button class="btn small frame" id="exit-anyway">Exit anyway</button>
+    </div>
+    <p class="dialog-note" id="exit-note" aria-live="polite"></p>
+    <div id="force" hidden>
+      <button class="force" id="force-close">Force close Runehaven</button>
+      <p class="force-hint">Ends the game immediately. Unsaved progress is lost.</p>
+    </div>
+  </div>
+</div>
+
+<script src="rml-fire-data.js"></script>
+<script src="rml-fire.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

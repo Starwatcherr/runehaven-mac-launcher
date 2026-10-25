@@ -1,0 +1,97 @@
+/* Runehaven Mac Launcher. Fonts: SIL OFL, see fonts/OFL-*.txt */
+@font-face { font-family: "Figtree"; src: url("fonts/Figtree.ttf") format("truetype"); font-weight: 300 900; }
+@font-face { font-family: "Pixelify Sans"; src: url("fonts/PixelifySans.ttf") format("truetype"); font-weight: 400 700; }
+@font-face { font-family: "Jacquard 24"; src: url("fonts/Jacquard24-Regular.ttf") format("truetype"); font-weight: 400; }
+
+:root {
+  --bg: #16191f; --side: #101217; --panel: #0c0f14; --line: #2a2e36;
+  --frame: #cfc9bd; --frame-dim: #5d5a54;
+  --text: #ebe7df; --muted: #8f9198; --red: #e0574f; --warn: #d4a35f;
+  --accent: #a52a46; --accent-soft: rgba(165, 42, 70, 0.16);
+  --ok: #6ccf7f;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 Figtree, sans-serif;
+             -webkit-user-select: none; user-select: none; cursor: default; overflow: hidden; }
+.app { display: grid; grid-template-columns: 64px 1fr; height: 100%; position: relative; }
+/* a screenshot from the game fills the right part, anchored on the lantern,
+   and fades into the page towards the left and the bottom */
+#backdrop { position: absolute; top: 0; right: 0; bottom: 0; width: 58%; pointer-events: none;
+        background: var(--bg) url("lantern.jpg") no-repeat 80% 45% / cover;
+        -webkit-mask-image: linear-gradient(to right, transparent 0, #000 40%), linear-gradient(to top, transparent 0, #000 30%);
+        -webkit-mask-composite: source-in; mask-image: linear-gradient(to right, transparent 0, #000 40%), linear-gradient(to top, transparent 0, #000 30%);
+        mask-composite: intersect; }
+main, nav { position: relative; z-index: 1; }
+
+/* the game's box: dark fill, one light line, corners cut by one pixel step */
+.frame { background: var(--panel); border: 3px solid var(--frame);
+         clip-path: polygon(3px 0, calc(100% - 3px) 0, 100% 3px, 100% calc(100% - 3px),
+                            calc(100% - 3px) 100%, 3px 100%, 0 calc(100% - 3px), 0 3px); }
+
+nav { background: var(--side); display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 0; }
+nav button { all: unset; position: relative; width: 44px; height: 44px; display: grid; place-items: center; color: var(--muted); cursor: pointer; }
+nav button:hover { color: var(--text); }
+nav button[aria-current="page"] { color: var(--text); }
+nav button[aria-current="page"]::before { content: ""; position: absolute; left: -6px; top: 19px; width: 6px; height: 6px;
+        background: var(--accent); transform: rotate(45deg); box-shadow: inset 1px 1px 0 rgba(255,255,255,.35); }
+nav button:focus-visible { outline: 2px solid var(--frame); }
+nav .spacer { flex: 1; }
+nav svg { width: 22px; height: 22px; }
+
+main { padding: 28px 40px 40px; display: grid; grid-template-rows: auto 1fr auto; gap: 14px; min-width: 0; min-height: 0; }
+
+header { display: flex; flex-direction: column; gap: 10px; }
+/* the burning logo, 125 x 49 simulation pixels shown at 3 screen px each (rml-fire.js) */
+.rml-logo { width: 375px; height: 147px; image-rendering: pixelated; display: block; margin-top: -40px; }
+header .names { display: flex; flex-direction: column; gap: 4px; }
+.title { font-family: "Jacquard 24", serif; font-size: 48px; line-height: 44px; letter-spacing: 0; margin: 0; font-weight: 400; }
+.by { color: var(--muted); font-size: 13px; line-height: 15px; }
+
+.req { max-width: 480px; align-self: start; }
+.req h2 { font-size: 22px; font-weight: 600; margin: 0 0 2px; }
+.req ul { list-style: none; margin: 0; padding: 0; }
+.req li { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 16px; padding: 8px 21px 8px 0; border-bottom: 1px solid var(--line); }
+.req li:last-child { border-bottom: 0; }
+.req .name { font-weight: 500; font-size: 16px; }
+.req .detail { display: block; color: var(--muted); font-size: 13px; }
+.req .detail.err { color: var(--red); }
+.mark { width: 20px; height: 20px; }
+.mark.ok { color: var(--ok); } .mark.warn { color: var(--warn); } .mark.err { color: var(--red); }
+.spin { width: 16px; height: 16px; border: 3px solid var(--line); border-top-color: var(--text); animation: spin .8s steps(8) infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* the launch button keeps the same distance to the right and the bottom edge */
+footer { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; }
+.left { width: 100%; max-width: 480px; }
+.right { width: 300px; flex: none; position: relative; }
+.btn { all: unset; box-sizing: border-box; display: block; width: 100%; height: 64px; text-align: center; cursor: pointer;
+       font-family: "Pixelify Sans", sans-serif; font-weight: 700; color: var(--text); }
+.btn.frame { background: var(--panel); border: 3px solid var(--frame); }
+.btn:hover:not([disabled]), .btn:focus-visible { background: var(--accent-soft); }
+.btn[disabled] { cursor: default; color: var(--muted); border-color: var(--frame-dim); }
+.install { font-size: 19px; line-height: 58px; }
+.btn.launch:not([disabled]) { border-color: var(--accent); }
+.launch { font-size: 24px; line-height: 58px; }
+/* while the game starts or runs, the button turns into the way out */
+.launch .hover { display: none; }
+.launch.active:hover .state, .launch.active:focus-visible .state { display: none; }
+.launch.active:hover .hover, .launch.active:focus-visible .hover { display: inline; }
+/* messages sit above the launch button, where the picture leaves room */
+.note { position: absolute; left: 0; right: 0; bottom: calc(100% + 10px); color: var(--muted); font-size: 13px; text-align: center; }
+.note.err { color: var(--red); }
+
+.dialog-back { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(8, 9, 12, 0.72); }
+.dialog-back[hidden] { display: none; }
+.dialog { width: 420px; padding: 24px 28px 22px; }
+.dialog h2 { font-family: "Pixelify Sans", sans-serif; font-weight: 700; font-size: 24px; margin: 0 0 8px; }
+.dialog p { margin: 0; }
+#exit-text { margin-bottom: 20px; }
+.actions { display: flex; gap: 12px; }
+.btn.small { height: 48px; font-size: 18px; line-height: 42px; }
+.dialog .dialog-note { color: var(--muted); font-size: 13px; text-align: center; min-height: 19px; margin-top: 10px; }
+.force { all: unset; display: block; width: 100%; text-align: center; cursor: pointer; margin-top: 6px;
+         font-family: "Pixelify Sans", sans-serif; font-weight: 700; font-size: 18px; color: #ff4b42; }
+.force:hover, .force:focus-visible { color: #ff7a72; text-decoration: underline; }
+.dialog .force-hint { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2px; }
+
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }

@@ -55,6 +55,9 @@ pub enum Error {
     #[error("Runehaven is not installed in any Steam library.")]
     GameNotInstalled,
 
+    #[error("Steam is still updating Runehaven or an update is waiting. Let Steam finish first.")]
+    GameNeedsUpdate,
+
     #[error("Runehaven is already running.")]
     AlreadyRunning,
 
