@@ -10,6 +10,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -143,11 +144,13 @@ pub enum RuntimeEvent {
     Done,
 }
 
-/// Downloads and assembles the runtime unless it is already there.
+/// Downloads and assembles the runtime unless it is already there. Setting
+/// `cancel` stops the download; what was finished stays for the next try.
 pub fn install(
     launcher: &LauncherPaths,
     spec: &RuntimeSpec,
     keep_downloads: bool,
+    cancel: &AtomicBool,
     on_event: &mut dyn FnMut(RuntimeEvent),
 ) -> Result<Runtime> {
     let runtime = Runtime::locate(launcher, spec);
@@ -166,7 +169,7 @@ pub fn install(
                 name: c.name.clone(),
             });
         } else {
-            download_verified(&c.url, &c.sha256, c.size, &dest, &mut |done, total| {
+            download_verified(&c.url, &c.sha256, c.size, &dest, cancel, &mut |done, total| {
                 on_event(RuntimeEvent::Downloading {
                     name: c.name.clone(),
                     done,
@@ -175,6 +178,9 @@ pub fn install(
             })?;
         }
         archives.push(dest);
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(Error::Interrupted);
     }
 
     let staging = launcher.runtime().join(format!("{}.staging", spec.id));
@@ -303,12 +309,13 @@ fn http_agent() -> ureq::Agent {
 }
 
 /// Downloads `url` to `dest` while hashing; the file only appears under its
-/// final name if size and checksum match.
+/// final name if size and checksum match. Setting `cancel` stops it.
 pub fn download_verified(
     url: &str,
     sha256: &str,
     size: u64,
     dest: &Path,
+    cancel: &AtomicBool,
     on_progress: &mut dyn FnMut(u64, u64),
 ) -> Result<()> {
     let part = dest.with_extension("part");
@@ -323,6 +330,11 @@ pub fn download_verified(
     let mut done = 0u64;
     let mut last_report = 0u64;
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            drop(file);
+            let _ = fs::remove_file(&part);
+            return Err(Error::Interrupted);
+        }
         let n = reader.read(&mut buf).ctx(|| format!("downloading {url}"))?;
         if n == 0 {
             break;
@@ -441,7 +453,7 @@ mod tests {
         }
 
         let mut events = Vec::new();
-        let rt = install(&launcher, &spec, true, &mut |e| events.push(e)).unwrap();
+        let rt = install(&launcher, &spec, true, &AtomicBool::new(false), &mut |e| events.push(e)).unwrap();
         assert!(rt.is_installed());
         assert_eq!(
             fs::read_to_string(rt.root.join("wswine.bundle/lib/d3d11.dll")).unwrap(),
@@ -461,7 +473,7 @@ mod tests {
         assert!(!launcher.runtime().join("test-1.staging").exists());
 
         // Second call is a no-op.
-        assert!(install(&launcher, &spec, true, &mut |_| {})
+        assert!(install(&launcher, &spec, true, &AtomicBool::new(false), &mut |_| {})
             .unwrap()
             .is_installed());
     }
@@ -480,12 +492,21 @@ mod network_tests {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join(c.archive_name());
         let mut calls = 0;
-        download_verified(&c.url, &c.sha256, c.size, &dest, &mut |_, _| calls += 1).unwrap();
+        let go = AtomicBool::new(false);
+        download_verified(&c.url, &c.sha256, c.size, &dest, &go, &mut |_, _| calls += 1).unwrap();
         assert!(calls > 10);
         assert_eq!(sha256_file(&dest).unwrap(), c.sha256);
         // A wrong checksum must not leave a file behind.
         let bad = tmp.path().join("bad.tar.gz");
-        assert!(download_verified(&c.url, &"0".repeat(64), c.size, &bad, &mut |_, _| {}).is_err());
+        assert!(download_verified(&c.url, &"0".repeat(64), c.size, &bad, &go, &mut |_, _| {}).is_err());
+        // Cancelling leaves nothing behind either.
+        let stopped = tmp.path().join("stopped.tar.gz");
+        let stop = AtomicBool::new(true);
+        assert!(matches!(
+            download_verified(&c.url, &c.sha256, c.size, &stopped, &stop, &mut |_, _| {}),
+            Err(Error::Interrupted)
+        ));
+        assert!(!stopped.exists() && !stopped.with_extension("part").exists());
         assert!(!bad.exists() && !bad.with_extension("part").exists());
     }
 }

@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -278,6 +279,16 @@ impl<T: Transport> SteamClient<T> {
 
     /// Starts Steam if needed and waits until it answers console commands.
     pub fn wait_ready(&self, on_status: &mut dyn FnMut(ReadyStatus)) -> Result<()> {
+        self.wait_ready_until(&AtomicBool::new(false), on_status)
+    }
+
+    /// Like [`Self::wait_ready`], but gives up as soon as `cancel` is set.
+    pub fn wait_ready_until(
+        &self,
+        cancel: &AtomicBool,
+        on_status: &mut dyn FnMut(ReadyStatus),
+    ) -> Result<()> {
+        let cancelled = || cancel.load(Ordering::Relaxed);
         let started = Instant::now();
         let elapsed = || started.elapsed().as_secs();
         let timeout = self.timing.ready_timeout;
@@ -292,6 +303,9 @@ impl<T: Transport> SteamClient<T> {
             launched = true;
         }
         while !self.transport.is_running() {
+            if cancelled() {
+                return Err(Error::Interrupted);
+            }
             if started.elapsed() > timeout {
                 return Err(Error::SteamNotReady {
                     secs: timeout.as_secs(),
@@ -308,6 +322,9 @@ impl<T: Transport> SteamClient<T> {
         }
 
         loop {
+            if cancelled() {
+                return Err(Error::Interrupted);
+            }
             if self.transport.accepts_commands() && self.console_log().is_file() {
                 match self.platform() {
                     Ok(_) => {

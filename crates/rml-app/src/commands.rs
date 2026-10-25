@@ -16,10 +16,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// One line of the requirements list on the home page.
 #[derive(Debug, Serialize)]
 pub struct Requirement {
-    id: &'static str,
+    pub id: &'static str,
     name: &'static str,
     /// `ok`, `missing` (the launcher can do something about it) or `failed`.
-    state: &'static str,
+    pub state: &'static str,
     detail: String,
 }
 
@@ -84,13 +84,18 @@ fn runtime(launcher: &LauncherPaths) -> Requirement {
     }
 }
 
+/// Everything the game needs, in the order the list shows and setup works.
+pub fn check_all(launcher: &LauncherPaths) -> Vec<Requirement> {
+    vec![rosetta(), steam(), game(), runtime(launcher)]
+}
+
 /// Checks everything the game needs. Takes a moment (it starts a few small
 /// programs), so it runs off the interface thread.
 #[tauri::command]
 pub async fn requirements() -> Result<Vec<Requirement>, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let launcher = LauncherPaths::detect().map_err(|e| e.to_string())?;
-        Ok(vec![rosetta(), steam(), game(), runtime(&launcher)])
+        Ok(check_all(&launcher))
     })
     .await
     .map_err(|e| e.to_string())?

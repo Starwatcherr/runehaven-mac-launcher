@@ -52,6 +52,9 @@ pub enum Error {
     )]
     Cancelled,
 
+    #[error("Cancelled.")]
+    Interrupted,
+
     #[error("Runehaven is not installed in any Steam library.")]
     GameNotInstalled,
 

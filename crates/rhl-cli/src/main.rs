@@ -420,7 +420,8 @@ fn runtime_cmd(command: RuntimeCmd, launcher: &LauncherPaths) -> Result<()> {
                 spec.download_size() >> 20
             );
             let mut last_pct = u64::MAX;
-            let rt = runtime::install(launcher, &spec, keep_downloads, &mut |e| match e {
+            let go = std::sync::atomic::AtomicBool::new(false);
+            let rt = runtime::install(launcher, &spec, keep_downloads, &go, &mut |e| match e {
                 runtime::RuntimeEvent::Downloading { name, done, total } => {
                     let pct = done * 100 / total.max(1);
                     if pct / 10 != last_pct / 10 || last_pct == u64::MAX {

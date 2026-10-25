@@ -4,6 +4,7 @@ use std::process::Command;
 
 use serde::Serialize;
 
+use crate::error::{Error, Result};
 use crate::paths::SteamPaths;
 use crate::steam::{library, RUNEHAVEN_APPID};
 
@@ -28,6 +29,30 @@ pub fn rosetta_installed() -> bool {
         .args(["-x86_64", "/usr/bin/true"])
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// Installs Rosetta 2 through Apple's software update. macOS asks for an
+/// administrator password in its own window; the launcher never sees it.
+pub fn install_rosetta() -> Result<()> {
+    let script = "do shell script \"/usr/sbin/softwareupdate --install-rosetta --agree-to-license\" \
+                  with prompt \"Runehaven Mac Launcher wants to install Rosetta 2 from Apple. \
+                  This accepts Apple's Rosetta license.\" with administrator privileges";
+    let out = Command::new("/usr/bin/osascript")
+        .args(["-e", script])
+        .output()
+        .map_err(|e| Error::Config(format!("could not ask macOS to install Rosetta 2: {e}")))?;
+    if out.status.success() && rosetta_installed() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    // -128: the password window was closed with Cancel.
+    if err.contains("(-128)") {
+        return Err(Error::Interrupted);
+    }
+    Err(Error::Config(format!(
+        "Rosetta 2 could not be installed: {}",
+        err.trim()
+    )))
 }
 
 /// Checks that need no running Steam.
