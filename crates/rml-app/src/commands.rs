@@ -74,7 +74,7 @@ fn runtime(launcher: &LauncherPaths) -> Requirement {
         return ok("runtime", NAME, format!("Custom: {}", wine.display()));
     }
     let spec = RuntimeSpec::bundled();
-    if Runtime::locate(launcher, &spec).is_installed() {
+    if Runtime::locate(&config, launcher, &spec).is_installed() {
         ok("runtime", NAME, "Installed")
     } else {
         missing(

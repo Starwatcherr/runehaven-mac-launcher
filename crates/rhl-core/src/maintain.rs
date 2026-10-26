@@ -54,9 +54,9 @@ pub fn import_settings(
 }
 
 /// Deletes the launcher's own Wine runtime so it can be downloaded again.
-pub fn remove_runtime(launcher: &LauncherPaths) -> Result<()> {
+pub fn remove_runtime(config: &Config, launcher: &LauncherPaths) -> Result<()> {
     let _lock = RunLock::acquire(launcher)?;
-    let rt = Runtime::locate(launcher, &RuntimeSpec::bundled());
+    let rt = Runtime::locate(config, launcher, &RuntimeSpec::bundled());
     if rt.root.exists() {
         fs::remove_dir_all(&rt.root).ctx(|| format!("removing {}", rt.root.display()))?;
     }
@@ -106,6 +106,7 @@ pub fn remove_data(
     let own_prefix = config.prefix.is_none();
     let zip = if own_prefix { pack_saves(config, launcher, saves_dest)? } else { None };
     let mut doomed = vec![
+        Runtime::locate(config, launcher, &RuntimeSpec::bundled()).root,
         launcher.runtime(),
         launcher.root.join("downloads"),
         launcher.logs(),
@@ -172,7 +173,12 @@ pub fn uninstall_launcher(
         doomed.extend([launcher.prefix(), launcher.root.join("backups")]);
     }
     if choice.runtime {
-        doomed.extend([launcher.runtime(), launcher.root.join("downloads")]);
+        // In a folder chosen in the settings only the runtime itself goes.
+        doomed.extend([
+            Runtime::locate(config, launcher, &RuntimeSpec::bundled()).root,
+            launcher.runtime(),
+            launcher.root.join("downloads"),
+        ]);
     }
     if choice.logs {
         doomed.push(launcher.logs());

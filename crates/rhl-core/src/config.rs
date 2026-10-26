@@ -24,6 +24,9 @@ pub struct Config {
     pub prefix: Option<PathBuf>,
     /// Additional environment variables for Wine.
     pub extra_env: BTreeMap<String, String>,
+    /// Steam library (its number) to install the game into; Steam's default
+    /// if `None`.
+    pub steam_library: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -33,6 +36,8 @@ pub struct RuntimeConfig {
     pub wine: Option<PathBuf>,
     /// Folders added to `DYLD_FALLBACK_LIBRARY_PATH` for Wine's helper libraries.
     pub library_dirs: Vec<PathBuf>,
+    /// Folder the launcher downloads its runtime into; its own if `None`.
+    pub dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -90,6 +95,13 @@ impl Config {
                     .collect()
             }
             "prefix" => self.prefix = opt_path(value),
+            "runtime-dir" => self.runtime.dir = opt_path(value),
+            "steam-library" => {
+                self.steam_library = match value {
+                    "default" => None,
+                    n => Some(n.parse().map_err(|_| bad("a library number or default"))?),
+                }
+            }
             "inputfix" => self.inputfix_dll = opt_path(value),
             "macfix" => self.macfix_dylib = opt_path(value),
             "hud" => {

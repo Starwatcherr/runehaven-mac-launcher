@@ -33,6 +33,7 @@
     <footer>
       <div class="left">
         <button class="btn install frame" id="install" disabled><span class="state" id="install-state">Checking…</span><span class="hover">Cancel</span></button>
+        <button class="btn custom frame" id="custom" hidden>Custom…</button>
       </div>
       <div class="right">
         <div class="note" id="note" aria-live="polite"></div>
@@ -92,6 +93,14 @@
           </select></li>
       </ul>
     </section>
+    <section class="group" aria-labelledby="inst-h">
+      <h2 id="inst-h">Installation</h2>
+      <ul class="rows">
+        <li><span><span class="name">Install locations</span>
+          <span class="detail">Steam library, Wine runtime and Wine setup.</span></span>
+          <button class="btn tiny frame" id="open-locations">Change…</button></li>
+      </ul>
+    </section>
     <section class="group" aria-labelledby="debug-h">
       <h2 id="debug-h">Debug</h2>
       <ul class="rows">
@@ -144,6 +153,43 @@
       <button class="force" id="force-close">Force close Runehaven</button>
       <p class="force-hint">Ends the game immediately. Unsaved progress is lost.</p>
     </div>
+  </div>
+</div>
+
+<div class="dialog-back" id="locations-dialog" hidden>
+  <div class="dialog frame wide" role="dialog" aria-modal="true" aria-labelledby="loc-h">
+    <h2 id="loc-h">Install locations</h2>
+    <ul class="rows places">
+      <li class="place">
+        <span class="name">Runehaven</span>
+        <span class="detail">Steam installs the game into one of its libraries.</span>
+        <div class="place-controls">
+          <select class="select" id="loc-library" aria-label="Steam library"></select>
+          <button class="btn tiny frame" id="loc-move" hidden>Move here</button>
+        </div>
+        <span class="detail"><button class="link" id="loc-add-library">Add a Steam library…</button> In Steam: Storage, then +.</span>
+      </li>
+      <li class="place" data-kind="runtime">
+        <span class="name">Wine runtime</span>
+        <div class="place-controls segmented">
+          <button class="btn tiny frame" data-mode="default">Default</button>
+          <button class="btn tiny frame" data-mode="folder">Folder…</button>
+          <button class="btn tiny frame" data-mode="existing">Existing Wine…</button>
+        </div>
+        <span class="detail path" id="loc-runtime"></span>
+      </li>
+      <li class="place" data-kind="prefix">
+        <span class="name">Wine setup</span>
+        <div class="place-controls segmented">
+          <button class="btn tiny frame" data-mode="default">Default</button>
+          <button class="btn tiny frame" data-mode="folder">Folder…</button>
+          <button class="btn tiny frame" data-mode="existing">Existing setup…</button>
+        </div>
+        <span class="detail path" id="loc-prefix"></span>
+      </li>
+    </ul>
+    <p class="dialog-note" id="loc-note" aria-live="polite"></p>
+    <div class="actions"><button class="btn small frame" id="loc-done">Done</button></div>
   </div>
 </div>
 

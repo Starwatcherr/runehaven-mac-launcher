@@ -15,8 +15,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::config::Config;
 use crate::error::{Error, IoContext, Result};
 use crate::paths::LauncherPaths;
+
+/// The folder holding the downloaded runtime: chosen in the settings, or the
+/// launcher's own.
+pub fn runtime_dir(config: &Config, launcher: &LauncherPaths) -> PathBuf {
+    config.runtime.dir.clone().unwrap_or_else(|| launcher.runtime())
+}
 
 const SPEC_JSON: &str = include_str!("../runtime.json");
 const MARKER: &str = ".runehaven-runtime";
@@ -110,9 +117,14 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn locate(launcher: &LauncherPaths, spec: &RuntimeSpec) -> Self {
+    /// The runtime in the folder the configuration names, or the launcher's own.
+    pub fn locate(config: &Config, launcher: &LauncherPaths, spec: &RuntimeSpec) -> Self {
+        Self::locate_in(&runtime_dir(config, launcher), spec)
+    }
+
+    pub fn locate_in(dir: &Path, spec: &RuntimeSpec) -> Self {
         Self {
-            root: launcher.runtime().join(&spec.id),
+            root: dir.join(&spec.id),
             spec: spec.clone(),
         }
     }
@@ -147,13 +159,14 @@ pub enum RuntimeEvent {
 /// Downloads and assembles the runtime unless it is already there. Setting
 /// `cancel` stops the download; what was finished stays for the next try.
 pub fn install(
+    config: &Config,
     launcher: &LauncherPaths,
     spec: &RuntimeSpec,
     keep_downloads: bool,
     cancel: &AtomicBool,
     on_event: &mut dyn FnMut(RuntimeEvent),
 ) -> Result<Runtime> {
-    let runtime = Runtime::locate(launcher, spec);
+    let runtime = Runtime::locate(config, launcher, spec);
     if runtime.is_installed() {
         on_event(RuntimeEvent::Done);
         return Ok(runtime);
@@ -183,7 +196,7 @@ pub fn install(
         return Err(Error::Interrupted);
     }
 
-    let staging = launcher.runtime().join(format!("{}.staging", spec.id));
+    let staging = runtime_dir(config, launcher).join(format!("{}.staging", spec.id));
     if staging.exists() {
         fs::remove_dir_all(&staging).ctx(|| format!("removing {}", staging.display()))?;
     }
@@ -360,6 +373,41 @@ pub fn download_verified(
     fs::rename(&part, dest).ctx(|| format!("moving {}", dest.display()))
 }
 
+/// Finds the `wine` program in what the user picked: the program itself, a
+/// Wine app (Wine Stable, CrossOver, Whisky's Wine) or a folder with
+/// `bin/wine`. Returns it with its helper library folder, if there is one.
+pub fn find_wine(choice: &Path) -> Option<(PathBuf, Vec<PathBuf>)> {
+    let is_wine = |p: &Path| {
+        p.is_file() && p.file_name().is_some_and(|n| n == "wine" || n == "wine64")
+    };
+    let wine = if is_wine(choice) {
+        choice.to_path_buf()
+    } else {
+        [
+            "bin/wine64",
+            "bin/wine",
+            "wswine.bundle/bin/wine",
+            "Contents/Resources/wine/bin/wine64",
+            "Contents/Resources/wine/bin/wine",
+            "Contents/SharedSupport/CrossOver/bin/wine",
+            "Contents/SharedSupport/wine/bin/wine64",
+            "Contents/SharedSupport/wine/bin/wine",
+        ]
+        .iter()
+        .map(|rel| choice.join(rel))
+        .find(|p| is_wine(p))?
+    };
+    // Builds keep their libraries in ../lib next to bin/.
+    let libs = wine
+        .parent()
+        .and_then(Path::parent)
+        .map(|base| base.join("lib"))
+        .filter(|l| l.is_dir())
+        .into_iter()
+        .collect();
+    Some((wine, libs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,7 +501,7 @@ mod tests {
         }
 
         let mut events = Vec::new();
-        let rt = install(&launcher, &spec, true, &AtomicBool::new(false), &mut |e| events.push(e)).unwrap();
+        let rt = install(&Config::default(), &launcher, &spec, true, &AtomicBool::new(false), &mut |e| events.push(e)).unwrap();
         assert!(rt.is_installed());
         assert_eq!(
             fs::read_to_string(rt.root.join("wswine.bundle/lib/d3d11.dll")).unwrap(),
@@ -473,7 +521,7 @@ mod tests {
         assert!(!launcher.runtime().join("test-1.staging").exists());
 
         // Second call is a no-op.
-        assert!(install(&launcher, &spec, true, &AtomicBool::new(false), &mut |_| {})
+        assert!(install(&Config::default(), &launcher, &spec, true, &AtomicBool::new(false), &mut |_| {})
             .unwrap()
             .is_installed());
     }
@@ -508,5 +556,20 @@ mod network_tests {
         ));
         assert!(!stopped.exists() && !stopped.with_extension("part").exists());
         assert!(!bad.exists() && !bad.with_extension("part").exists());
+    }
+
+    #[test]
+    fn finds_wine_in_what_the_user_picked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tmp.path().join("Wine Stable.app");
+        let bin = app.join("Contents/Resources/wine/bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(app.join("Contents/Resources/wine/lib")).unwrap();
+        fs::write(bin.join("wine"), "").unwrap();
+        let (wine, libs) = find_wine(&app).unwrap();
+        assert_eq!(wine, bin.join("wine"));
+        assert_eq!(libs, vec![app.join("Contents/Resources/wine/lib")]);
+        assert_eq!(find_wine(&bin.join("wine")).unwrap().0, bin.join("wine"));
+        assert!(find_wine(tmp.path()).is_none());
     }
 }

@@ -211,6 +211,24 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Whether `path` is a Wine prefix (for example a Whisky or CrossOver bottle).
+pub fn looks_like_prefix(path: &Path) -> bool {
+    path.join("drive_c").is_dir() && path.join("system.reg").is_file()
+}
+
+/// Where a new prefix goes when the user picks `folder`: the folder itself
+/// if it is empty, otherwise a new folder inside it.
+pub fn new_prefix_in(folder: &Path) -> PathBuf {
+    let empty = fs::read_dir(folder)
+        .map(|mut e| e.all(|f| f.is_ok_and(|f| f.file_name() == ".DS_Store")))
+        .unwrap_or(true);
+    if empty {
+        folder.to_path_buf()
+    } else {
+        folder.join("Runehaven Wine")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +297,16 @@ mod tests {
         let old = fake_prefix(&tmp.path().join("old"), "kian", None);
         let new = fake_prefix(&tmp.path().join("new"), "crossover", None);
         assert!(import_saves(&old, &new).is_err());
+    }
+
+    #[test]
+    fn recognises_prefixes_and_picks_a_place_for_new_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!looks_like_prefix(tmp.path()));
+        assert_eq!(new_prefix_in(tmp.path()), tmp.path());
+        fs::create_dir_all(tmp.path().join("drive_c")).unwrap();
+        fs::write(tmp.path().join("system.reg"), "WINE REGISTRY").unwrap();
+        assert!(looks_like_prefix(tmp.path()));
+        assert_eq!(new_prefix_in(tmp.path()), tmp.path().join("Runehaven Wine"));
     }
 }

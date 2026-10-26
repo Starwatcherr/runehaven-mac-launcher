@@ -131,6 +131,11 @@ enum GameCmd {
     Verify,
     /// Remove the game through Steam (save games stay in the prefix).
     Uninstall,
+    /// Move the game into another Steam library (number from `rhl doctor`).
+    Move {
+        #[arg(long)]
+        library: u32,
+    },
     /// Start the game through Wine.
     Launch {
         /// Only print what would be started.
@@ -350,6 +355,12 @@ fn game_cmd(command: GameCmd, launcher: &LauncherPaths) -> Result<()> {
             println!("{}", if seen { "Steam checked the files." } else { "Steam showed no sign of checking." });
             Ok(())
         }
+        GameCmd::Move { library } => {
+            let client = ready_client(300)?;
+            steam::move_game(&client, launcher, &InstallOptions::default(), library, &mut |e| eprintln!("{e:?}"))?;
+            println!("Runehaven is now in library {library}.");
+            Ok(())
+        }
         GameCmd::Uninstall => {
             let client = ready_client(300)?;
             steam::uninstall(&client, launcher, &InstallOptions::default(), &mut |e| eprintln!("{e:?}"))?;
@@ -404,9 +415,10 @@ fn ensure_prefix(config: &Config, launcher: &LauncherPaths) -> Result<()> {
 
 fn runtime_cmd(command: RuntimeCmd, launcher: &LauncherPaths) -> Result<()> {
     let spec = runtime::RuntimeSpec::bundled();
+    let config = Config::load(&launcher.config_file())?;
     match command {
         RuntimeCmd::Status => {
-            let rt = runtime::Runtime::locate(launcher, &spec);
+            let rt = runtime::Runtime::locate(&config, launcher, &spec);
             println!(
                 "runtime {}: {}",
                 spec.id,
@@ -430,7 +442,7 @@ fn runtime_cmd(command: RuntimeCmd, launcher: &LauncherPaths) -> Result<()> {
             );
             let mut last_pct = u64::MAX;
             let go = std::sync::atomic::AtomicBool::new(false);
-            let rt = runtime::install(launcher, &spec, keep_downloads, &go, &mut |e| match e {
+            let rt = runtime::install(&config, launcher, &spec, keep_downloads, &go, &mut |e| match e {
                 runtime::RuntimeEvent::Downloading { name, done, total } => {
                     let pct = done * 100 / total.max(1);
                     if pct / 10 != last_pct / 10 || last_pct == u64::MAX {

@@ -71,6 +71,7 @@ function render() {
     : installing ? `Installing…${progress === null ? "" : ` ${Math.round(progress * 100)}%`}`
     : reqs.length === 0 ? "Checking…" : allMet ? "Requirements met" : anyFailed ? "Try again" : "Install requirements";
   launch.disabled = installing || (!allMet && !running);
+  $("custom").hidden = allMet || installing || reqs.length === 0;
   launch.classList.toggle("active", running);
   launchState.textContent = !running ? "Launch Game" : loaded ? "Running" : "Starting…";
   if (!running && !note.classList.contains("err")) say(allMet || installing || reqs.length === 0 ? "" : "Install the requirements first.");
@@ -111,6 +112,8 @@ install.addEventListener("click", async () => {
     render();
   }
 });
+
+$("custom").addEventListener("click", () => window.rml.openLocations());
 
 list.addEventListener("click", e => {
   if (e.target.dataset.action === "get-steam") invoke("open_steam_download");

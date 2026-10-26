@@ -135,6 +135,7 @@ fn run(cancel: &Arc<AtomicBool>, emit: &dyn Fn(SetupEvent)) -> Result<(), Stop> 
             .map_err(at(id))?;
         let opts = InstallOptions {
             cancel: cancel.clone(),
+            library_index: Config::load(&launcher.config_file()).map_err(at(id))?.steam_library,
             ..Default::default()
         };
         steam::install(&client, &launcher, &opts, &mut |event| match event {
@@ -165,7 +166,8 @@ fn run(cancel: &Arc<AtomicBool>, emit: &dyn Fn(SetupEvent)) -> Result<(), Stop> 
         let before = |name: &str| -> u64 {
             sizes.iter().take_while(|(n, _)| n != name).map(|(_, s)| s).sum()
         };
-        runtime::install(&launcher, &spec, false, cancel, &mut |event| match event {
+        let config = Config::load(&launcher.config_file()).map_err(at(id))?;
+        runtime::install(&config, &launcher, &spec, false, cancel, &mut |event| match event {
             RuntimeEvent::Downloading { name, done, .. } => {
                 let all = before(&name) + done;
                 working(
@@ -180,7 +182,6 @@ fn run(cancel: &Arc<AtomicBool>, emit: &dyn Fn(SetupEvent)) -> Result<(), Stop> 
         })
         .map_err(at(id))?;
         // The first start would do this too; doing it now keeps that start quick.
-        let config = Config::load(&launcher.config_file()).map_err(at(id))?;
         launch::ensure_prefix(&config, &launcher, &mut |_| {
             working(id, "Setting up Wine, about a minute…", None)
         })

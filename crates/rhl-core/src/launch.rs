@@ -52,7 +52,7 @@ impl ResolvedRuntime {
                 library_dirs: config.runtime.library_dirs.clone(),
             },
             None => {
-                let rt = Runtime::locate(launcher, &RuntimeSpec::bundled());
+                let rt = Runtime::locate(config, launcher, &RuntimeSpec::bundled());
                 if !rt.is_installed() {
                     return Err(Error::Config(
                         "the Wine runtime is not installed yet (run `rhl runtime install`)".into(),

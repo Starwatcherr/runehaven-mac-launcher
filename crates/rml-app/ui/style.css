@@ -11,6 +11,8 @@
   --ok: #6ccf7f;
 }
 * { box-sizing: border-box; }
+/* hidden always wins, whatever display a class sets */
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 Figtree, sans-serif;
              -webkit-user-select: none; user-select: none; cursor: default; overflow: hidden; }
 .app { display: grid; grid-template-columns: 64px 1fr; height: 100%; position: relative; }
@@ -104,6 +106,16 @@ footer { display: flex; justify-content: space-between; align-items: flex-end; g
 .dialog p { margin: 0; }
 #exit-text, #confirm-text, #un-text { margin-bottom: 20px; }
 .dialog.wide { width: 520px; }
+/* Home: a smaller "Custom…" next to "Install requirements" while something is missing */
+.left { display: flex; gap: 12px; }
+.btn.custom { width: 130px; flex: none; font-size: 17px; line-height: 58px; }
+
+/* the install locations dialog */
+.places li.place { display: block; padding: 10px 0; }
+.place-controls { display: flex; gap: 8px; margin: 6px 0 4px; }
+.place-controls .select { flex: 1; min-width: 0; }
+.segmented .btn[aria-pressed="true"] { border-color: var(--accent); background-color: var(--accent-soft); }
+.detail.path { overflow-wrap: anywhere; }
 .dialog .choices { margin: -8px 0 16px; }
 .toggle:disabled { opacity: 0.4; cursor: default; }
 .actions { display: flex; gap: 12px; }

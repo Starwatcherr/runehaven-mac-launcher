@@ -7,7 +7,7 @@ pub mod library;
 
 pub use client::{MacTransport, ReadyStatus, SteamClient, Timing, Transport};
 pub use install::{
-    install, recover_platform, uninstall, verify, InstallEvent, InstallOptions, Installed,
+    install, move_game, recover_platform, uninstall, verify, InstallEvent, InstallOptions, Installed,
     RestoreAt, RUNEHAVEN_APPID,
 };
 pub use library::{AppManifest, Library};

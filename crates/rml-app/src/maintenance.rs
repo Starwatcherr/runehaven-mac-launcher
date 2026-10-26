@@ -64,7 +64,7 @@ fn status() -> rhl_core::Result<Status> {
     };
 
     let spec = RuntimeSpec::bundled();
-    let rt = Runtime::locate(&launcher, &spec);
+    let rt = Runtime::locate(&config, &launcher, &spec);
     let runtime = match &config.runtime.wine {
         Some(wine) => Part { installed: true, detail: format!("Custom: {}", wine.display()), bytes: 0 },
         None if rt.is_installed() => Part {
@@ -104,7 +104,7 @@ enum JobEvent {
 }
 
 /// Runs a job off the interface thread and reports its outcome as events.
-fn spawn_job(
+pub fn spawn_job(
     app: AppHandle,
     job: &'static str,
     run: impl FnOnce(&dyn Fn(&str)) -> rhl_core::Result<String> + Send + 'static,
@@ -171,7 +171,8 @@ pub fn uninstall_game(app: AppHandle) {
 pub async fn remove_runtime() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
         let launcher = LauncherPaths::detect().map_err(|e| e.to_string())?;
-        maintain::remove_runtime(&launcher).map_err(|e| e.to_string())
+        let config = Config::load(&launcher.config_file()).map_err(|e| e.to_string())?;
+        maintain::remove_runtime(&config, &launcher).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

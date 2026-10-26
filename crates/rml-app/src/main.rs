@@ -3,12 +3,14 @@
 //! [`commands`].
 
 mod commands;
+mod locations;
 mod maintenance;
 mod settings;
 mod setup;
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(commands::GameState::default())
         .manage(setup::SetupState::default())
         .invoke_handler(tauri::generate_handler![
@@ -33,6 +35,11 @@ fn main() {
             maintenance::remove_data,
             maintenance::uninstall_launcher,
             maintenance::quit_and_trash,
+            locations::install_locations,
+            locations::set_install_location,
+            locations::pick_path,
+            locations::open_steam_settings,
+            locations::move_game,
         ])
         .run(tauri::generate_context!())
         .expect("the launcher window could not be opened");

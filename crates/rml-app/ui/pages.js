@@ -186,8 +186,106 @@
     $("un-ok").disabled = $("un-cancel").disabled = false;
   }
 
+  // --- install locations (Home "Custom…" and Settings) --------------------------------------------
+  const locDialog = $("locations-dialog"), locNote = $("loc-note"), libSelect = $("loc-library");
+  let locs = null;
+
+  function sayLoc(text, isError = false) {
+    locNote.textContent = text;
+    locNote.style.color = isError ? "var(--red)" : "";
+  }
+
+  function updateMove() {
+    const here = locs && locs.libraries.find(l => l.has_game);
+    $("loc-move").hidden = !here || String(here.index) === libSelect.value;
+  }
+
+  async function loadLocations() {
+    try {
+      locs = await invoke("install_locations");
+    } catch (e) {
+      sayLoc(String(e), true);
+      return;
+    }
+    libSelect.innerHTML = "";
+    if (!locs.libraries.length) libSelect.add(new Option("Steam is not installed", ""));
+    for (const l of locs.libraries) {
+      const free = l.free_bytes == null ? "" : ` · ${fmtSize(l.free_bytes)} free`;
+      const label = `${l.index === 0 ? "Main library" : l.path} · ${l.drive}${free}${l.has_game ? " · Runehaven is here" : ""}`;
+      libSelect.add(new Option(label, String(l.index)));
+    }
+    const here = locs.libraries.find(l => l.has_game);
+    libSelect.value = String(locs.chosen_library ?? (here ? here.index : 0));
+    updateMove();
+    for (const kind of ["runtime", "prefix"]) {
+      locDialog.querySelectorAll(`[data-kind=${kind}] [data-mode]`)
+        .forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === locs[kind].mode)));
+      $(`loc-${kind}`).textContent = locs[kind].path;
+    }
+  }
+
+  function openLocations() {
+    sayLoc("");
+    locDialog.hidden = false;
+    loadLocations();
+    $("loc-done").focus();
+  }
+  function closeLocations() {
+    locDialog.hidden = true;
+    window.rml.refresh();
+  }
+  window.rml.openLocations = openLocations;
+  $("open-locations").addEventListener("click", openLocations);
+  $("loc-done").addEventListener("click", closeLocations);
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !locDialog.hidden && confirmDialog.hidden) closeLocations(); });
+  window.addEventListener("focus", () => { if (!locDialog.hidden) loadLocations(); });
+
+  libSelect.addEventListener("change", async () => {
+    updateMove();
+    try {
+      sayLoc(await invoke("set_install_location", { kind: "library", mode: "chosen", value: libSelect.value }));
+    } catch (e) {
+      sayLoc(String(e), true);
+    }
+  });
+
+  $("loc-move").addEventListener("click", async () => {
+    if (!await ask("Move Runehaven?", "Steam moves the game into the chosen library and checks the files afterwards.", "Move")) return;
+    sayLoc("Starting Steam…");
+    $("loc-move").disabled = true;
+    invoke("move_game", { library: Number(libSelect.value) });
+  });
+
+  $("loc-add-library").addEventListener("click", () => {
+    invoke("open_steam_settings");
+    sayLoc("Add the library in Steam's Storage settings, then come back here.");
+  });
+
+  locDialog.querySelectorAll("[data-kind] [data-mode]").forEach(b => b.addEventListener("click", async () => {
+    const kind = b.closest("[data-kind]").dataset.kind, mode = b.dataset.mode;
+    let value = null;
+    if (mode !== "default") {
+      value = await invoke("pick_path", { what: kind === "runtime" && mode === "existing" ? "wine" : "folder" });
+      if (!value) return;
+    }
+    try {
+      sayLoc(await invoke("set_install_location", { kind, mode, value }));
+      await loadLocations();
+    } catch (e) {
+      sayLoc(String(e), true);
+    }
+  }));
+
+  function moveProgress(e) {
+    if (e.kind === "working") { sayLoc(e.detail); return; }
+    $("loc-move").disabled = false;
+    if (e.kind === "done") sayLoc(e.detail); else sayLoc(e.message, true);
+    loadLocations();
+  }
+
   window.__TAURI__.event.listen("maintenance", ({ payload: e }) => {
     if (e.job === "uninstall-launcher") { uninstallProgress(e); return; }
+    if (e.job === "move") { moveProgress(e); return; }
     if (e.kind === "working") { sayM(e.detail); return; }
     jobRunning = false;
     if (e.kind === "done") sayM(e.detail);

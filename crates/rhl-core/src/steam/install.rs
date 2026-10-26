@@ -304,6 +304,112 @@ pub fn uninstall<T: Transport>(
     Ok(())
 }
 
+/// Moves the installed game into another Steam library. Steam must be ready.
+/// Steam checks the moved files afterwards; Windows stays set until that is
+/// over, like for an installation.
+pub fn move_game<T: Transport>(
+    client: &SteamClient<T>,
+    launcher: &LauncherPaths,
+    opts: &InstallOptions,
+    to_library: u32,
+    on_event: &mut dyn FnMut(InstallEvent),
+) -> Result<()> {
+    recover_platform(client, launcher)?;
+    let libs = library::libraries(&client.paths)?;
+    let (lib, manifest) = library::find_app(&libs, opts.appid)?.ok_or(Error::GameNotInstalled)?;
+    if lib.index == to_library {
+        return Ok(());
+    }
+    let target_lib = libs
+        .iter()
+        .find(|l| l.index == to_library)
+        .ok_or_else(|| Error::Config(format!("Steam has no library {to_library}.")))?;
+    let source = lib.steamapps().join("common").join(&manifest.installdir);
+    let target = target_lib.steamapps().join("common").join(&manifest.installdir);
+    // Steam refuses to move into an existing folder. One holding only the
+    // launcher's own files is a leftover of an earlier move and can go.
+    remove_leftovers(&target);
+    if target.exists() {
+        return Err(Error::Config(format!(
+            "There is already a folder {} in that library. Move or delete it, then try again.",
+            target.display()
+        )));
+    }
+    let pending = PendingRestore::new(client.platform()?, "moving Runehaven");
+    let mut guard = PlatformGuard {
+        client,
+        launcher,
+        value: pending.restore_value().to_string(),
+        restored: false,
+    };
+    let mut state = LauncherState::load(&launcher.state_file())?;
+    state.pending_platform_restore = Some(pending);
+    state.save(&launcher.state_file())?;
+
+    on_event(InstallEvent::SwitchingPlatform);
+    let result = client
+        .set_platform("windows")
+        .and_then(|_| run_move(client, opts, to_library, on_event));
+    let restored = guard.restore(on_event);
+    result?;
+    restored?;
+    // Steam leaves the launcher's input fix behind in the old folder.
+    remove_leftovers(&source);
+    on_event(InstallEvent::Done);
+    Ok(())
+}
+
+fn run_move<T: Transport>(
+    client: &SteamClient<T>,
+    opts: &InstallOptions,
+    to_library: u32,
+    on_event: &mut dyn FnMut(InstallEvent),
+) -> Result<()> {
+    let content = LogTail::at_end(&client.paths.content_log())?;
+    client.exec("app_move", &[&opts.appid.to_string(), &to_library.to_string()])?;
+    on_event(InstallEvent::Requested);
+    let started = Instant::now();
+    let mut moved_at: Option<Instant> = None;
+    loop {
+        sleep(opts.poll);
+        if opts.cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        let log = content.read_since_start()?;
+        let canceled = format!("AppID {} canceled moving : ", opts.appid);
+        if let Some(reason) = log.lines().find_map(|l| l.split_once(&canceled).map(|(_, r)| r.trim())) {
+            return Err(Error::MoveFailed(reason.to_string()));
+        }
+        let Some((_, after)) = log.split_once("Finished moving install folder") else {
+            // A big game takes a while; Steam has said it started moving.
+            let moving = log.contains(&format!("AppID {} moving from", opts.appid));
+            let limit = if moving { opts.stall_timeout } else { opts.start_timeout };
+            if started.elapsed() > limit {
+                return Err(Error::Config("Steam did not move the game.".into()));
+            }
+            continue;
+        };
+        let at = *moved_at.get_or_insert_with(|| {
+            on_event(InstallEvent::JobPlanned);
+            Instant::now()
+        });
+        // Afterwards Steam usually checks the moved files once.
+        let check = content_signals(after, opts.appid);
+        match check.finished.as_deref() {
+            Some("No Error") => return Ok(()),
+            Some(other) => return Err(Error::InstallFailedBecause(other.to_string())),
+            None if !check.activity && at.elapsed() > MOVE_SETTLE => return Ok(()),
+            None if at.elapsed() > opts.stall_timeout => {
+                return Err(Error::InstallStalled(opts.stall_timeout.as_secs()))
+            }
+            None => {}
+        }
+    }
+}
+
+/// How long to wait for Steam's check after a move before calling it done.
+const MOVE_SETTLE: Duration = Duration::from_secs(20);
+
 /// Files the launcher itself puts into the game folder, which Steam leaves
 /// behind on uninstall.
 const OWN_FILES: [&str; 2] = ["version.dll", ".DS_Store"];
@@ -821,5 +927,78 @@ mod tests {
         std::fs::write(tmp.path().join("my-mod.txt"), "keep me").unwrap();
         remove_leftovers(tmp.path());
         assert!(tmp.path().join("my-mod.txt").exists());
+    }
+
+    #[test]
+    fn moves_the_game_and_waits_for_steams_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let c = client(tmp.path());
+        let launcher = LauncherPaths::at(tmp.path().join("launcher"));
+        let main = Library { index: 0, path: c.paths.data_dir.clone() };
+        let second = Library { index: 1, path: tmp.path().join("SteamLibrary") };
+        std::fs::create_dir_all(second.steamapps()).unwrap();
+        std::fs::write(
+            c.paths.data_dir.join("steamapps/libraryfolders.vdf"),
+            format!("\"libraryfolders\" {{ \"0\" {{ \"path\" \"{}\" }} \"1\" {{ \"path\" \"{}\" }} }}",
+                main.path.display(), second.path.display()),
+        ).unwrap();
+        std::fs::write(main.manifest_path(RUNEHAVEN_APPID), READY).unwrap();
+        let content = c.paths.content_log();
+        std::fs::create_dir_all(content.parent().unwrap()).unwrap();
+        std::fs::write(&content, "").unwrap();
+
+        let (from, to, log) = (main.manifest_path(RUNEHAVEN_APPID), second.manifest_path(RUNEHAVEN_APPID), content.clone());
+        *c.transport.on_command.borrow_mut() = Some(Box::new(move |arg: &str| {
+            if arg.starts_with("+app_move") {
+                std::fs::rename(&from, &to).unwrap();
+                append(&log, "[x] AppID 2676030 moving from \"a\" to \"b\"\n[x] Finished moving install folder (345226541 bytes, 615 files)\n");
+                let log = log.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(60));
+                    append(&log, "[x] AppID 2676030 state changed : Update Required,Fully Installed,Files Missing,\n");
+                    append(&log, "[x] AppID 2676030 scheduler finished : removed from schedule (result No Error, state 0xc) \n");
+                });
+            }
+        }));
+        let mut events = Vec::new();
+        move_game(&c, &launcher, &options(), 1, &mut |e| events.push(e)).unwrap();
+        assert!(second.manifest_path(RUNEHAVEN_APPID).exists());
+        assert_eq!(*c.transport.platform.borrow(), "macos");
+        assert_eq!(c.transport.sent.borrow().iter().filter(|a| a.starts_with("+app_move 2676030 1")).count(), 1);
+    }
+
+    #[test]
+    fn a_canceled_move_is_reported_at_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let c = client(tmp.path());
+        let launcher = LauncherPaths::at(tmp.path().join("launcher"));
+        let main = Library { index: 0, path: c.paths.data_dir.clone() };
+        let second = Library { index: 1, path: tmp.path().join("SteamLibrary") };
+        std::fs::create_dir_all(second.steamapps()).unwrap();
+        std::fs::write(
+            c.paths.data_dir.join("steamapps/libraryfolders.vdf"),
+            format!("\"libraryfolders\" {{ \"0\" {{ \"path\" \"{}\" }} \"1\" {{ \"path\" \"{}\" }} }}",
+                main.path.display(), second.path.display()),
+        ).unwrap();
+        std::fs::write(main.manifest_path(RUNEHAVEN_APPID), READY).unwrap();
+        // A leftover from an earlier move: only the launcher's input fix.
+        let leftover = second.steamapps().join("common/Runehaven");
+        std::fs::create_dir_all(&leftover).unwrap();
+        std::fs::write(leftover.join("version.dll"), "old fix").unwrap();
+        let content = c.paths.content_log();
+        std::fs::create_dir_all(content.parent().unwrap()).unwrap();
+        std::fs::write(&content, "").unwrap();
+        let log = content.clone();
+        *c.transport.on_command.borrow_mut() = Some(Box::new(move |arg: &str| {
+            if arg.starts_with("+app_move") {
+                append(&log, "[x] AppID 2676030 canceled moving : Not enough disk space\n");
+            }
+        }));
+        let started = Instant::now();
+        let err = move_game(&c, &launcher, &options(), 1, &mut |_| {}).unwrap_err();
+        assert!(matches!(&err, Error::MoveFailed(r) if r == "Not enough disk space"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(1), "reported without waiting");
+        assert!(!leftover.exists(), "the old leftover was cleared before the move");
+        assert_eq!(*c.transport.platform.borrow(), "macos");
     }
 }

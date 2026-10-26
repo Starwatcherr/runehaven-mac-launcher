@@ -481,7 +481,7 @@ pub(crate) mod fake {
                     self.append(" - install state: Fully Installed,");
                     self.append(" - update state:  ( No Error )");
                 }
-                (Some("app_install" | "app_uninstall" | "app_mark_validation" | "app_start_validation"), _) => {}
+                (Some("app_install" | "app_uninstall" | "app_move" | "app_mark_validation" | "app_start_validation"), _) => {}
                 _ => self.append(&format!(">>> command not found: {body}")),
             }
             if let Some(cb) = self.on_command.borrow_mut().as_mut() {

@@ -172,6 +172,24 @@ impl AppManifest {
     }
 }
 
+/// Free space on the drive holding `path`, in bytes.
+pub fn free_space(path: &Path) -> Option<u64> {
+    let out = std::process::Command::new("/bin/df").arg("-k").arg(path).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let kb: u64 = text.lines().nth(1)?.split_whitespace().nth(3)?.parse().ok()?;
+    Some(kb * 1024)
+}
+
+/// A short name for the drive holding `path`: the volume name for an
+/// external drive, "This Mac" for the internal one.
+pub fn drive_name(path: &Path) -> String {
+    let mut parts = path.components().map(|c| c.as_os_str().to_string_lossy().into_owned());
+    match (parts.nth(1).as_deref(), parts.next()) {
+        (Some("Volumes"), Some(name)) => name,
+        _ => "This Mac".to_string(),
+    }
+}
+
 /// Reads all Steam libraries. The main Steam folder is always included as
 /// library 0, even if `libraryfolders.vdf` cannot be read.
 pub fn libraries(steam: &SteamPaths) -> Result<Vec<Library>> {
