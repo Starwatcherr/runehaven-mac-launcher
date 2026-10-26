@@ -166,14 +166,7 @@ fn run(cli: Cli) -> Result<()> {
     let launcher = LauncherPaths::detect()?;
     match cli.command {
         Cmd::Doctor => {
-            for c in doctor::run() {
-                let mark = match c.ok {
-                    Some(true) => "ok  ",
-                    Some(false) => "FAIL",
-                    None => "??  ",
-                };
-                println!("[{mark}] {:<18} {}", c.name, c.detail);
-            }
+            print!("{}", doctor::report());
             Ok(())
         }
         Cmd::Steam { command } => steam_cmd(command, &launcher),
@@ -546,44 +539,7 @@ fn config_cmd(command: ConfigCmd, launcher: &LauncherPaths) -> Result<()> {
             Ok(())
         }
         ConfigCmd::Set { key, value } => {
-            let bad = |what: &str| Error::Config(format!("invalid value for {key}: {what}"));
-            // "default" clears a path setting so the launcher uses its own.
-            let opt_path = |v: &str| (v != "default").then(|| PathBuf::from(v));
-            match key.as_str() {
-                "wine" => config.runtime.wine = opt_path(&value),
-                "library-dirs" => {
-                    config.runtime.library_dirs = value
-                        .split(',')
-                        .filter(|s| !s.is_empty() && *s != "default")
-                        .map(PathBuf::from)
-                        .collect()
-                }
-                "prefix" => config.prefix = opt_path(&value),
-                "inputfix" => config.inputfix_dll = opt_path(&value),
-                "macfix" => config.macfix_dylib = opt_path(&value),
-                "hud" => {
-                    // Apple's Metal performance HUD (FPS, frame time, GPU memory).
-                    if value.parse().map_err(|_| bad("true or false"))? {
-                        config
-                            .extra_env
-                            .insert("MTL_HUD_ENABLED".into(), "1".into());
-                    } else {
-                        config.extra_env.remove("MTL_HUD_ENABLED");
-                    }
-                }
-                "fullscreen" => {
-                    config.display.fullscreen = value.parse().map_err(|_| bad("true or false"))?
-                }
-                "retina" => {
-                    config.display.retina = value.parse().map_err(|_| bad("true or false"))?
-                }
-                "size" => {
-                    let (w, h) = value.split_once('x').ok_or_else(|| bad("WIDTHxHEIGHT"))?;
-                    config.display.width = w.parse().map_err(|_| bad("WIDTHxHEIGHT"))?;
-                    config.display.height = h.parse().map_err(|_| bad("WIDTHxHEIGHT"))?;
-                }
-                _ => return Err(Error::Config(format!("unknown setting `{key}`"))),
-            }
+            config.set(&key, &value)?;
             config.save(&path)?;
             println!("Saved {}", path.display());
             Ok(())

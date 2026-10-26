@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, IoContext, Result};
 
+/// Turns on Apple's Metal performance HUD.
+const HUD_VAR: &str = "MTL_HUD_ENABLED";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct Config {
@@ -66,6 +69,48 @@ impl Config {
         }
     }
 
+    /// Whether Apple's Metal performance HUD (FPS, frame time, GPU memory) is on.
+    pub fn hud(&self) -> bool {
+        self.extra_env.contains_key(HUD_VAR)
+    }
+
+    /// Changes one setting by name, as the CLI and the app's settings page do.
+    /// For paths, "default" means the launcher's own.
+    pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let bad = |what: &str| Error::Config(format!("invalid value for {key}: {what}"));
+        let flag = |v: &str| v.parse::<bool>().map_err(|_| bad("true or false"));
+        let opt_path = |v: &str| (v != "default").then(|| PathBuf::from(v));
+        match key {
+            "wine" => self.runtime.wine = opt_path(value),
+            "library-dirs" => {
+                self.runtime.library_dirs = value
+                    .split(',')
+                    .filter(|s| !s.is_empty() && *s != "default")
+                    .map(PathBuf::from)
+                    .collect()
+            }
+            "prefix" => self.prefix = opt_path(value),
+            "inputfix" => self.inputfix_dll = opt_path(value),
+            "macfix" => self.macfix_dylib = opt_path(value),
+            "hud" => {
+                if flag(value)? {
+                    self.extra_env.insert(HUD_VAR.into(), "1".into());
+                } else {
+                    self.extra_env.remove(HUD_VAR);
+                }
+            }
+            "fullscreen" => self.display.fullscreen = flag(value)?,
+            "retina" => self.display.retina = flag(value)?,
+            "size" => {
+                let (w, h) = value.split_once('x').ok_or_else(|| bad("WIDTHxHEIGHT"))?;
+                self.display.width = w.parse().map_err(|_| bad("WIDTHxHEIGHT"))?;
+                self.display.height = h.parse().map_err(|_| bad("WIDTHxHEIGHT"))?;
+            }
+            _ => return Err(Error::Config(format!("unknown setting `{key}`"))),
+        }
+        Ok(())
+    }
+
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).ctx(|| format!("creating {}", dir.display()))?;
@@ -89,5 +134,21 @@ mod tests {
         assert_eq!(c.display.width, 1280);
         assert!(c.display.retina);
         assert!(c.runtime.wine.is_none());
+    }
+
+    #[test]
+    fn settings_are_changed_by_name() {
+        let mut c = Config::default();
+        c.set("size", "1600x900").unwrap();
+        c.set("hud", "true").unwrap();
+        c.set("prefix", "/tmp/p").unwrap();
+        assert_eq!((c.display.width, c.display.height), (1600, 900));
+        assert!(c.hud());
+        assert_eq!(c.prefix.as_deref(), Some(Path::new("/tmp/p")));
+        c.set("hud", "false").unwrap();
+        c.set("prefix", "default").unwrap();
+        assert!(!c.hud() && c.prefix.is_none());
+        assert!(c.set("retina", "maybe").is_err());
+        assert!(c.set("colour", "red").is_err());
     }
 }
