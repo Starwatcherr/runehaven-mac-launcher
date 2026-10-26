@@ -42,7 +42,7 @@
 
   // --- Maintenance ----------------------------------------------------------------------------------
   const mNote = $("m-note");
-  const actions = ["m-update", "m-verify", "m-uninstall", "m-reinstall", "m-reset", "m-remove"].map($);
+  const actions = ["m-update", "m-verify", "m-uninstall", "m-reinstall", "m-reset", "m-remove", "m-uninstall-launcher"].map($);
   let status = null;
   let jobRunning = false;
 
@@ -70,6 +70,7 @@
     $("m-reinstall").disabled = busy || status.runtime.detail.startsWith("Custom");
     $("m-reset").disabled = busy || !status.prefix.installed || !status.runtime.installed;
     $("m-remove").disabled = busy || status.data_bytes === 0;
+    $("m-uninstall-launcher").disabled = busy;
     if (window.rml.busy() && !jobRunning) sayM("Close Runehaven or wait for the installation to finish first.");
   }
 
@@ -128,7 +129,65 @@
     invoke("remove_data");
   });
 
+  // --- uninstalling the launcher itself ------------------------------------------------------------
+  const unDialog = $("uninstall-dialog"), unNote = $("un-note");
+  let unRunning = false;
+  const choice = name => unDialog.querySelector(`[data-choice=${name}]`);
+
+  function setChoice(name, on, disabled) {
+    choice(name).setAttribute("aria-checked", String(on));
+    choice(name).disabled = disabled;
+  }
+
+  function openUninstall() {
+    unNote.textContent = "";
+    unNote.style.color = "";
+    $("un-runtime").textContent = "WineCX, DXMT and libraries" + (status.runtime.bytes ? ` · ${fmtSize(status.runtime.bytes)}` : "");
+    setChoice("runtime", true, false);
+    if (status.own_prefix) {
+      $("un-prefix").textContent = "Your save games are packed onto the desktop first" + (status.prefix.bytes ? ` · ${fmtSize(status.prefix.bytes)}` : "");
+      setChoice("prefix", true, false);
+    } else {
+      $("un-prefix").textContent = "Your own Wine setup is never removed.";
+      setChoice("prefix", false, true);
+    }
+    $("un-game").textContent = status.game.installed ? `Uninstalled through Steam · ${fmtSize(status.game.bytes)}` : "Not installed.";
+    setChoice("game", false, !status.game.installed);
+    $("un-ok").disabled = $("un-cancel").disabled = false;
+    unDialog.hidden = false;
+    $("un-cancel").focus();
+  }
+
+  unDialog.querySelectorAll("[data-choice]").forEach(t => t.addEventListener("click", () => {
+    if (!t.disabled && !unRunning) t.setAttribute("aria-checked", String(t.getAttribute("aria-checked") !== "true"));
+  }));
+  $("un-cancel").addEventListener("click", () => { if (!unRunning) unDialog.hidden = true; });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !unDialog.hidden && !unRunning) unDialog.hidden = true; });
+  $("m-uninstall-launcher").addEventListener("click", openUninstall);
+
+  $("un-ok").addEventListener("click", () => {
+    const on = name => choice(name).getAttribute("aria-checked") === "true";
+    unRunning = jobRunning = true;
+    $("un-ok").disabled = $("un-cancel").disabled = true;
+    unNote.textContent = "Starting…";
+    invoke("uninstall_launcher", { choice: { runtime: on("runtime"), prefix: on("prefix"), logs: on("logs") }, game: on("game") });
+  });
+
+  function uninstallProgress(e) {
+    if (e.kind === "working") { unNote.textContent = e.detail; return; }
+    if (e.kind === "done") {
+      unNote.textContent = `${e.detail} The launcher closes now.`;
+      setTimeout(() => invoke("quit_and_trash"), 3000);
+      return;
+    }
+    unRunning = jobRunning = false;
+    unNote.textContent = e.message;
+    unNote.style.color = "var(--red)";
+    $("un-ok").disabled = $("un-cancel").disabled = false;
+  }
+
   window.__TAURI__.event.listen("maintenance", ({ payload: e }) => {
+    if (e.job === "uninstall-launcher") { uninstallProgress(e); return; }
     if (e.kind === "working") { sayM(e.detail); return; }
     jobRunning = false;
     if (e.kind === "done") sayM(e.detail);

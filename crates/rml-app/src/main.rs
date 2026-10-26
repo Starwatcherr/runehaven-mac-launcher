@@ -31,6 +31,8 @@ fn main() {
             maintenance::remove_runtime,
             maintenance::reset_prefix,
             maintenance::remove_data,
+            maintenance::uninstall_launcher,
+            maintenance::quit_and_trash,
         ])
         .run(tauri::generate_context!())
         .expect("the launcher window could not be opened");

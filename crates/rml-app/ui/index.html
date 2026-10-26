@@ -60,10 +60,12 @@
       </ul>
     </section>
     <section class="group" aria-labelledby="m-data-h">
-      <h2 id="m-data-h">Launcher data</h2>
+      <h2 id="m-data-h">Launcher</h2>
       <ul class="rows">
         <li><span><span class="name">Remove launcher data</span><span class="detail" id="m-data"></span></span>
           <button class="btn tiny frame danger" id="m-remove">Remove</button></li>
+        <li><span><span class="name">Uninstall Runehaven Mac Launcher</span><span class="detail">Removes the app and, if you like, everything it brought along.</span></span>
+          <button class="btn tiny frame danger" id="m-uninstall-launcher">Uninstall</button></li>
       </ul>
     </section>
     <p class="page-note" id="m-note" aria-live="polite"></p>
@@ -142,6 +144,28 @@
       <button class="force" id="force-close">Force close Runehaven</button>
       <p class="force-hint">Ends the game immediately. Unsaved progress is lost.</p>
     </div>
+  </div>
+</div>
+
+<div class="dialog-back" id="uninstall-dialog" hidden>
+  <div class="dialog frame wide" role="dialog" aria-modal="true" aria-labelledby="un-h" aria-describedby="un-text">
+    <h2 id="un-h">Uninstall Runehaven Mac Launcher?</h2>
+    <p id="un-text">The launcher's settings are removed and the app moves to the Trash. What else should go?</p>
+    <ul class="rows choices">
+      <li><span><span class="name">Wine runtime</span><span class="detail" id="un-runtime">WineCX, DXMT and libraries</span></span>
+        <button class="toggle" role="switch" data-choice="runtime" aria-checked="true" aria-label="Remove the Wine runtime"></button></li>
+      <li><span><span class="name">Wine setup</span><span class="detail" id="un-prefix">Your save games are packed onto the desktop first.</span></span>
+        <button class="toggle" role="switch" data-choice="prefix" aria-checked="true" aria-label="Remove the Wine setup"></button></li>
+      <li><span><span class="name">Logs and downloads</span><span class="detail">Only needed for bug reports.</span></span>
+        <button class="toggle" role="switch" data-choice="logs" aria-checked="true" aria-label="Remove logs and downloads"></button></li>
+      <li><span><span class="name">Runehaven itself</span><span class="detail" id="un-game">Uninstalled through Steam.</span></span>
+        <button class="toggle" role="switch" data-choice="game" aria-checked="false" aria-label="Uninstall Runehaven too"></button></li>
+    </ul>
+    <div class="actions">
+      <button class="btn small frame" id="un-cancel">Cancel</button>
+      <button class="btn small frame danger" id="un-ok">Uninstall</button>
+    </div>
+    <p class="dialog-note" id="un-note" aria-live="polite"></p>
   </div>
 </div>
 

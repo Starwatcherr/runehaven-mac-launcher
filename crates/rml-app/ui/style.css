@@ -102,7 +102,10 @@ footer { display: flex; justify-content: space-between; align-items: flex-end; g
 .dialog { width: 420px; padding: 24px 28px 22px; }
 .dialog h2 { font-family: "Pixelify Sans", sans-serif; font-weight: 700; font-size: 24px; margin: 0 0 8px; }
 .dialog p { margin: 0; }
-#exit-text, #confirm-text { margin-bottom: 20px; }
+#exit-text, #confirm-text, #un-text { margin-bottom: 20px; }
+.dialog.wide { width: 520px; }
+.dialog .choices { margin: -8px 0 16px; }
+.toggle:disabled { opacity: 0.4; cursor: default; }
 .actions { display: flex; gap: 12px; }
 .btn.small { height: 48px; font-size: 18px; line-height: 42px; }
 .dialog .dialog-note { color: var(--muted); font-size: 13px; text-align: center; min-height: 19px; margin-top: 10px; }

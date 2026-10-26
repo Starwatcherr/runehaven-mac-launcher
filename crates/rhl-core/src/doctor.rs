@@ -11,7 +11,7 @@ use crate::error::{Error, IoContext, Result};
 use crate::launch::prefix_path;
 use crate::paths::{LauncherPaths, SteamPaths};
 use crate::steam::{library, RUNEHAVEN_APPID};
-use crate::util::utc_stamp;
+use crate::util::{free_path, utc_stamp};
 
 /// How many of the latest game starts go into a log export.
 const EXPORTED_STARTS: usize = 10;
@@ -244,7 +244,7 @@ pub fn export_logs(launcher: &LauncherPaths, dest_dir: &Path) -> Result<PathBuf>
     fs::write(staging.join("config.json"), config_text).ctx(|| "writing config.json".into())?;
 
     fs::create_dir_all(dest_dir).ctx(|| format!("creating {}", dest_dir.display()))?;
-    let zip = dest_dir.join(format!("{name}.zip"));
+    let zip = free_path(dest_dir, &name, "zip");
     let status = Command::new("/usr/bin/ditto")
         .args(["-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent"])
         .arg(&staging)

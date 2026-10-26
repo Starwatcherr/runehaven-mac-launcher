@@ -7,9 +7,10 @@ use std::sync::Arc;
 
 use rhl_core::config::Config;
 use rhl_core::launch::{self, prefix_path};
-use rhl_core::maintain::{self, disk_usage};
+use rhl_core::maintain::{self, disk_usage, UninstallChoice};
 use rhl_core::paths::LauncherPaths;
 use rhl_core::runtime::{Runtime, RuntimeSpec};
+use rhl_core::state::LauncherState;
 use rhl_core::steam::{self, InstallEvent, InstallOptions, SteamClient};
 use rhl_core::Error;
 use serde::Serialize;
@@ -206,4 +207,75 @@ pub fn remove_data(app: AppHandle) {
             None => "Removed.".into(),
         })
     });
+}
+
+/// Removes the launcher's settings and, as chosen, the runtime, the prefix,
+/// the logs and the game itself. The interface then calls `quit_and_trash`.
+#[tauri::command]
+pub fn uninstall_launcher(app: AppHandle, choice: UninstallChoice, game: bool) {
+    spawn_job(app, "uninstall-launcher", move |working| {
+        let launcher = LauncherPaths::detect()?;
+        let config = Config::load(&launcher.config_file()).unwrap_or_default();
+        let pending = LauncherState::load(&launcher.state_file())?.pending_platform_restore.is_some();
+        if game || pending {
+            working("Starting Steam…");
+            let client = SteamClient::detect()?;
+            client.wait_ready_until(&AtomicBool::new(false), &mut |_| {
+                working("Waiting for Steam. Log in if it asks you to.")
+            })?;
+            if pending {
+                steam::recover_platform(&client, &launcher)?;
+            }
+            if game {
+                working("Uninstalling Runehaven through Steam…");
+                let opts = InstallOptions { cancel: Arc::new(AtomicBool::new(false)), ..Default::default() };
+                match steam::uninstall(&client, &launcher, &opts, &mut |_| {}) {
+                    Ok(()) | Err(Error::GameNotInstalled) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        working("Removing…");
+        let desktop = std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join("Desktop"))
+            .ok_or_else(|| Error::Config("HOME is not set".into()))?;
+        Ok(match maintain::uninstall_launcher(&config, &launcher, choice, &desktop)? {
+            Some(zip) => format!(
+                "Uninstalled. Your save games are on the desktop: {}",
+                zip.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            None => "Uninstalled.".into(),
+        })
+    });
+}
+
+/// Quits the app and moves it to the Trash once it has quit. If moving is
+/// not possible, Finder shows the app so it can be dragged there. In a
+/// development build (not an `.app`) it only quits.
+#[tauri::command]
+pub fn quit_and_trash(app: AppHandle) {
+    let bundle = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(PathBuf::from));
+    if let (Some(bundle), Some(home)) = (bundle, std::env::var_os("HOME")) {
+        let name = bundle.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let target = PathBuf::from(home).join(".Trash").join(format!("{name} {stamp}.app"));
+        let _ = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                r#"while /bin/kill -0 "$1" 2>/dev/null; do /bin/sleep 0.3; done; /bin/mv "$2" "$3" || /usr/bin/open -R "$2""#,
+                "sh",
+                &std::process::id().to_string(),
+            ])
+            .arg(&bundle)
+            .arg(&target)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    app.exit(0);
 }
