@@ -46,4 +46,6 @@ cargo build --release
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Runehaven itself and its assets belong to Cikoria Studio.
+GNU General Public License, version 3 or later, see [LICENSE](LICENSE), with additional terms: the credit "Project by Starwatcherr" stays visible, and the name and logo are not licensed, so distributed forks need their own. The logo, the app icon, the Runehaven screenshot and the fonts are under other terms. Details in [NOTICE.md](NOTICE.md).
+
+Runehaven itself and its assets belong to Cikoria Studio.
