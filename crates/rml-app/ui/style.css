@@ -115,7 +115,7 @@ footer { display: flex; justify-content: space-between; align-items: flex-end; g
 /* every page fills the same place next to the side bar; only one is shown */
 .app > nav { grid-column: 1; grid-row: 1; }
 .app > .page { grid-column: 2; grid-row: 1; }
-.page.sub { display: block; overflow-y: auto; }
+.page.sub { display: block; overflow-y: auto; padding-bottom: 28px; }
 .page[hidden] { display: none; }
 .page-title { font-family: "Jacquard 24", serif; font-size: 48px; line-height: 44px; font-weight: 400; margin: 4px 0 12px; }
 .group { max-width: 560px; margin: 0 0 12px; }
@@ -124,7 +124,8 @@ footer { display: flex; justify-content: space-between; align-items: flex-end; g
 .group .page-note { margin-top: 10px; }
 .about-name { font-family: "Pixelify Sans", sans-serif; font-weight: 700; font-size: 22px; margin: 0 0 4px; }
 .about-name .version { color: var(--muted); font-weight: 500; font-size: 16px; margin-left: 6px; }
-.about-text { margin: 12px 0 0; }
+.about-text { margin: 10px 0 0; }
+.group .by { margin: 0; }
 .row-actions { display: flex; gap: 8px; }
 .btn.tiny { display: inline-block; width: auto; height: 36px; padding: 0 14px; font-size: 15px; line-height: 30px; }
 .btn.danger { color: #ff4b42; }
