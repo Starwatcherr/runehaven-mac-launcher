@@ -43,7 +43,30 @@
 
   <main class="page sub" data-page="maintenance" hidden>
     <h1 class="page-title">Maintenance</h1>
-    <p class="page-note">Updates, repair and uninstall come in the next step.</p>
+    <section class="group" aria-labelledby="m-game-h">
+      <h2 id="m-game-h">Runehaven</h2>
+      <ul class="rows">
+        <li><span><span class="name">Game files</span><span class="detail" id="m-game">Checking…</span></span>
+          <span class="row-actions"><button class="btn tiny frame" id="m-update" hidden>Update</button><button class="btn tiny frame" id="m-verify">Verify</button><button class="btn tiny frame" id="m-uninstall">Uninstall</button></span></li>
+      </ul>
+    </section>
+    <section class="group" aria-labelledby="m-wine-h">
+      <h2 id="m-wine-h">Wine</h2>
+      <ul class="rows">
+        <li><span><span class="name">Wine runtime</span><span class="detail" id="m-runtime"></span></span>
+          <button class="btn tiny frame" id="m-reinstall">Reinstall</button></li>
+        <li><span><span class="name">Wine setup</span><span class="detail" id="m-prefix"></span></span>
+          <button class="btn tiny frame" id="m-reset">Reset</button></li>
+      </ul>
+    </section>
+    <section class="group" aria-labelledby="m-data-h">
+      <h2 id="m-data-h">Launcher data</h2>
+      <ul class="rows">
+        <li><span><span class="name">Remove launcher data</span><span class="detail" id="m-data"></span></span>
+          <button class="btn tiny frame danger" id="m-remove">Remove</button></li>
+      </ul>
+    </section>
+    <p class="page-note" id="m-note" aria-live="polite"></p>
   </main>
 
   <main class="page sub" data-page="settings" hidden>
@@ -118,6 +141,17 @@
     <div id="force" hidden>
       <button class="force" id="force-close">Force close Runehaven</button>
       <p class="force-hint">Ends the game immediately. Unsaved progress is lost.</p>
+    </div>
+  </div>
+</div>
+
+<div class="dialog-back" id="confirm-dialog" hidden>
+  <div class="dialog frame" role="alertdialog" aria-modal="true" aria-labelledby="confirm-h" aria-describedby="confirm-text">
+    <h2 id="confirm-h"></h2>
+    <p id="confirm-text"></p>
+    <div class="actions">
+      <button class="btn small frame" id="confirm-cancel">Cancel</button>
+      <button class="btn small frame" id="confirm-ok"></button>
     </div>
   </div>
 </div>

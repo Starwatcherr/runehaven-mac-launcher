@@ -59,7 +59,8 @@ fn game() -> Requirement {
     const NAME: &str = "Runehaven (Windows version)";
     match launch::locate_game() {
         Ok((_, m, _)) if m.is_ready() => ok("game", NAME, "Installed through Steam"),
-        Ok(_) => missing("game", NAME, "Steam is updating it"),
+        Ok((_, m, _)) if m.update_pending() => missing("game", NAME, "Update available"),
+        Ok(_) => missing("game", NAME, "Steam is working on it"),
         Err(Error::GameNotInstalled) => missing("game", NAME, "Not installed"),
         Err(Error::SteamNotInstalled(_)) => missing("game", NAME, "Needs Steam"),
         Err(e) => failed("game", NAME, e.to_string()),

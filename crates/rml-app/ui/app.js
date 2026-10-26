@@ -224,6 +224,13 @@ listen("game", ({ payload: e }) => {
 // Steam or the game may have changed while the window was in the background.
 window.addEventListener("focus", () => { if (!running && !installing) refresh(); });
 
+// For the other pages (pages.js): whether something is running, and the home page's own actions.
+window.rml = {
+  busy: () => running || installing,
+  refresh,
+  install: async () => { await refresh(); if (!install.disabled) install.click(); },
+};
+
 RMLFire.start($("rml-fire"));
 invoke("game_running").then(r => { running = loaded = r; render(); });
 refresh();

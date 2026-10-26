@@ -38,6 +38,60 @@ impl MacTransport {
 
 const STEAM_PIPE: &str = "/tmp/steam.pipe";
 
+/// Starts Steam's forwarder so that macOS counts it as part of Steam, not of
+/// the launcher. The forwarder sometimes updates Steam's app bundle; started
+/// as a plain child, macOS would blame the launcher and block it ("prevented
+/// from modifying apps"). Terminal apps and browsers use the same call for
+/// the programs they start. Output goes nowhere.
+fn spawn_disclaimed(program: &Path, argument: &str) -> std::io::Result<libc::pid_t> {
+    use std::ffi::CString;
+    use std::io::{Error as IoError, ErrorKind};
+    use std::os::unix::ffi::OsStrExt;
+
+    extern "C" {
+        // libSystem, available since macOS 10.14.
+        fn responsibility_spawnattrs_setdisclaim(
+            attrs: *mut libc::posix_spawnattr_t,
+            disclaim: libc::c_int,
+        ) -> libc::c_int;
+    }
+    let check = |rc: libc::c_int| if rc == 0 { Ok(()) } else { Err(IoError::from_raw_os_error(rc)) };
+    let invalid = |e| IoError::new(ErrorKind::InvalidInput, e);
+    let path = CString::new(program.as_os_str().as_bytes()).map_err(invalid)?;
+    let arg = CString::new(argument).map_err(invalid)?;
+    let devnull = CString::new("/dev/null").map_err(invalid)?;
+    let argv = [path.as_ptr() as *mut libc::c_char, arg.as_ptr() as *mut libc::c_char, std::ptr::null_mut()];
+
+    // SAFETY: the attribute and action objects are initialised before use and
+    // destroyed afterwards; all strings outlive the spawn call.
+    unsafe {
+        let mut attr: libc::posix_spawnattr_t = std::ptr::null_mut();
+        let mut actions: libc::posix_spawn_file_actions_t = std::ptr::null_mut();
+        check(libc::posix_spawnattr_init(&mut attr))?;
+        check(libc::posix_spawn_file_actions_init(&mut actions))?;
+        let mut result = check(responsibility_spawnattrs_setdisclaim(&mut attr, 1));
+        for (fd, flags) in [(0, libc::O_RDONLY), (1, libc::O_WRONLY), (2, libc::O_WRONLY)] {
+            if result.is_ok() {
+                result = check(libc::posix_spawn_file_actions_addopen(&mut actions, fd, devnull.as_ptr(), flags, 0));
+            }
+        }
+        let mut pid: libc::pid_t = 0;
+        if result.is_ok() {
+            result = check(libc::posix_spawn(
+                &mut pid,
+                path.as_ptr(),
+                &actions,
+                &attr,
+                argv.as_ptr(),
+                *libc::_NSGetEnviron(),
+            ));
+        }
+        libc::posix_spawn_file_actions_destroy(&mut actions);
+        libc::posix_spawnattr_destroy(&mut attr);
+        result.map(|()| pid)
+    }
+}
+
 /// The numeric id of the macOS user running the launcher.
 fn current_uid() -> Option<u32> {
     let out = Command::new("/usr/bin/id").arg("-u").output().ok()?;
@@ -62,22 +116,16 @@ impl Transport for MacTransport {
                  from the account that owns it (rm {STEAM_PIPE}) and start Steam here again."
             )));
         }
-        let mut child = Command::new(&self.paths.bootstrapper)
-            .arg(argument)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+        let pid = spawn_disclaimed(&self.paths.bootstrapper, argument)
             .ctx(|| format!("starting {}", self.paths.bootstrapper.display()))?;
         // The forwarder normally exits at once. If it does not, it may have
         // turned into a new Steam instance; leave it alone rather than kill it.
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            if child
-                .try_wait()
-                .ctx(|| "waiting for the Steam forwarder".into())?
-                .is_some()
-            {
+            let mut status = 0;
+            // SAFETY: plain call on our own child's pid.
+            let done = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if done == pid || done == -1 {
                 return Ok(());
             }
             sleep(Duration::from_millis(100));
@@ -350,6 +398,20 @@ impl<T: Transport> SteamClient<T> {
 }
 
 #[cfg(test)]
+mod spawn_tests {
+    use super::*;
+
+    #[test]
+    fn disclaimed_child_runs_and_exits() {
+        let pid = spawn_disclaimed(Path::new("/bin/echo"), "hello").unwrap();
+        let mut status = 0;
+        // SAFETY: waiting for our own child.
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0);
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod fake {
     //! A pretend Steam that answers commands by appending to a log file.
 
@@ -419,7 +481,7 @@ pub(crate) mod fake {
                     self.append(" - install state: Fully Installed,");
                     self.append(" - update state:  ( No Error )");
                 }
-                (Some("app_install"), _) => {}
+                (Some("app_install" | "app_uninstall" | "app_mark_validation" | "app_start_validation"), _) => {}
                 _ => self.append(&format!(">>> command not found: {body}")),
             }
             if let Some(cb) = self.on_command.borrow_mut().as_mut() {

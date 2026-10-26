@@ -44,6 +44,12 @@ pub enum Error {
     #[error("Steam reported an error while installing (UpdateResult {0}).")]
     InstallFailed(u32),
 
+    #[error("Steam could not check the files (Steam says: {0}). Try again in a moment.")]
+    VerifyFailed(String),
+
+    #[error("Steam could not install or update Runehaven (Steam says: {0}). Check your connection and try again.")]
+    InstallFailedBecause(String),
+
     #[error("The installation made no progress for {0} seconds.")]
     InstallStalled(u64),
 

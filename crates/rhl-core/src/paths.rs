@@ -55,6 +55,11 @@ impl SteamPaths {
         self.data_dir.join("logs/console_log.txt")
     }
 
+    /// Steam's log of downloads, updates and file checks.
+    pub fn content_log(&self) -> PathBuf {
+        self.data_dir.join("logs/content_log.txt")
+    }
+
     /// Steam has kept `libraryfolders.vdf` in two places over the years.
     pub fn library_folders_files(&self) -> [PathBuf; 2] {
         [

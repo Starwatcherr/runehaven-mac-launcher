@@ -190,7 +190,7 @@ fn newest(dir: &Path, keep: impl Fn(&str) -> bool, count: usize) -> Vec<PathBuf>
         .filter(|e| e.file_name().to_str().is_some_and(&keep))
         .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
         .collect();
-    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
     found.into_iter().take(count).map(|(_, p)| p).collect()
 }
 

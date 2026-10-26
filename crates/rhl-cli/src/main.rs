@@ -11,7 +11,7 @@ use rhl_core::paths::LauncherPaths;
 use rhl_core::steam::{
     self, library, InstallEvent, InstallOptions, ReadyStatus, SteamClient, RUNEHAVEN_APPID,
 };
-use rhl_core::{doctor, launch, prefix, runtime, settings, Error, Result};
+use rhl_core::{doctor, launch, maintain, prefix, runtime, Error, Result};
 
 #[derive(Parser)]
 #[command(
@@ -127,6 +127,10 @@ enum GameCmd {
         #[arg(long)]
         hold_platform: bool,
     },
+    /// Have Steam check the game files and fetch broken or missing ones.
+    Verify,
+    /// Remove the game through Steam (save games stay in the prefix).
+    Uninstall,
     /// Start the game through Wine.
     Launch {
         /// Only print what would be started.
@@ -340,6 +344,18 @@ fn game_cmd(command: GameCmd, launcher: &LauncherPaths) -> Result<()> {
             }
             Ok(())
         }
+        GameCmd::Verify => {
+            let client = ready_client(300)?;
+            let seen = steam::verify(&client, launcher, &InstallOptions::default(), &mut |e| eprintln!("{e:?}"))?;
+            println!("{}", if seen { "Steam checked the files." } else { "Steam showed no sign of checking." });
+            Ok(())
+        }
+        GameCmd::Uninstall => {
+            let client = ready_client(300)?;
+            steam::uninstall(&client, launcher, &InstallOptions::default(), &mut |e| eprintln!("{e:?}"))?;
+            println!("Runehaven was uninstalled.");
+            Ok(())
+        }
         GameCmd::Launch { dry_run, force, game_args } => {
             let (config, mut plan) = launch::prepare(launcher, force).map_err(|e| match e {
                 Error::GameNeedsUpdate => Error::Config(format!("{e} Or pass --force.")),
@@ -500,20 +516,11 @@ fn import_settings(
     launcher: &LauncherPaths,
     prefix: &std::path::Path,
 ) -> Result<()> {
-    let Some(found) = settings::Settings::read(from)? else {
+    eprintln!("Taking over settings …");
+    let Some(report) = maintain::import_settings(from, config, launcher, prefix)? else {
         println!("No Runehaven settings found in {} – nothing to take over.", from.display());
         return Ok(());
     };
-    let rt = launch::ResolvedRuntime::resolve(config, launcher)?;
-    eprintln!("Taking over {} settings …", found.values.len());
-    let report = settings::import(
-        &found,
-        &rt.wine,
-        &rt.library_path(),
-        prefix,
-        &launcher.root.join("backups"),
-        &launcher.logs().join("settings-import.log"),
-    )?;
     println!(
         "Took over {} settings{} ({} internal Unity values left out).",
         report.imported,

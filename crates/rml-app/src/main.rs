@@ -3,6 +3,7 @@
 //! [`commands`].
 
 mod commands;
+mod maintenance;
 mod settings;
 mod setup;
 
@@ -24,6 +25,12 @@ fn main() {
             settings::open_logs,
             settings::export_logs,
             settings::open_link,
+            maintenance::maintenance_status,
+            maintenance::verify_game,
+            maintenance::uninstall_game,
+            maintenance::remove_runtime,
+            maintenance::reset_prefix,
+            maintenance::remove_data,
         ])
         .run(tauri::generate_context!())
         .expect("the launcher window could not be opened");
