@@ -1,0 +1,64 @@
+# A tag like v0.1.0-beta.1 builds the release from this repository's source:
+# the input fix on Linux, the Mac helper and the app on macOS. The result is a
+# draft release with the DMG, both helpers and their SHA-256 checksums.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  input-fix:
+    name: Input fix (Windows DLL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the MinGW-w64 cross compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - run: inputfix/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: version.dll
+          path: inputfix/build/version.dll
+
+  app:
+    name: App (macOS, Apple Silicon)
+    needs: input-fix
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check that the tag matches the app version
+        run: |
+          version=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' crates/rml-app/tauri.conf.json)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match the app version $version" >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: version.dll
+          path: inputfix/build
+      - name: Build the Mac helper
+        run: OUT=build/app/rml-macfix.dylib macfix/build.sh
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+      - run: cargo test --workspace
+      - name: Build the app and the DMG
+        working-directory: crates/rml-app
+        run: cargo tauri build --bundles app,dmg
+      - name: Collect the files and their checksums
+        run: |
+          mkdir dist
+          cp target/release/bundle/dmg/*.dmg dist/
+          cp inputfix/build/version.dll macfix/build/app/rml-macfix.dylib dist/
+          cd dist && shasum -a 256 * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: dist/*

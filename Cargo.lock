@@ -2759,7 +2759,7 @@ dependencies = [
 
 [[package]]
 name = "rml-app"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "rml-core",
  "serde",
@@ -2771,7 +2771,7 @@ dependencies = [
 
 [[package]]
 name = "rml-cli"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "clap",
  "ctrlc",
@@ -2781,7 +2781,7 @@ dependencies = [
 
 [[package]]
 name = "rml-core"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "libc",
  "serde",

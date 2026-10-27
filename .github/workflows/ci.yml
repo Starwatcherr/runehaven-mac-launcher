@@ -1,0 +1,44 @@
+# Every push to main and every pull request: build the helpers, then test
+# and lint the Rust code on macOS (the app needs both helpers to build).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  input-fix:
+    name: Input fix (Windows DLL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the MinGW-w64 cross compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - run: inputfix/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: version.dll
+          path: inputfix/build/version.dll
+
+  test:
+    name: Test (macOS)
+    needs: input-fix
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: version.dll
+          path: inputfix/build
+      - name: Build the Mac helper
+        run: OUT=build/app/rml-macfix.dylib macfix/build.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
