@@ -13,6 +13,9 @@ pub struct LauncherState {
     /// Set before Steam's platform is switched, cleared after it is restored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_platform_restore: Option<PendingRestore>,
+    /// The Mac helper the game last started with (see `launch::helper_stamp`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_helper: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -84,6 +87,7 @@ mod tests {
         );
         let state = LauncherState {
             pending_platform_restore: Some(PendingRestore::new(String::new(), "test")),
+            ..Default::default()
         };
         state.save(&path).unwrap();
         let loaded = LauncherState::load(&path).unwrap();

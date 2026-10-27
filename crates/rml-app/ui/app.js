@@ -199,11 +199,14 @@ $("force-close").addEventListener("click", async () => {
 // --- what the game does ---------------------------------------------------------------------------
 listen("game", ({ payload: e }) => {
   switch (e.state) {
+    case "starting":
+      if (e.first_start) say("The first start after an update can take a minute.");
+      break;
     case "step":
       if (e.step === "setting_up_prefix") say("Setting up Wine, first start only (about a minute)…");
       if (e.step === "prefix_ready") say("");
       break;
-    case "running": loaded = true; break;
+    case "running": loaded = true; say(""); break;
     case "crashed":
       running = loaded = false;
       closeExit();

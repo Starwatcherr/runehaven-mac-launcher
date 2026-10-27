@@ -8,6 +8,7 @@ use rml_core::config::Config;
 use rml_core::launch::{self, LogSignal, PlayerLogWatch, StartEvent};
 use rml_core::paths::{LauncherPaths, SteamPaths};
 use rml_core::runtime::{Runtime, RuntimeSpec};
+use rml_core::state::LauncherState;
 use rml_core::steam::{MacTransport, Transport};
 use rml_core::{doctor, Error};
 use serde::Serialize;
@@ -112,7 +113,8 @@ pub struct GameState {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 enum GameEvent {
-    Starting,
+    /// `first_start`: the first start with a new Mac helper, which is slow once.
+    Starting { first_start: bool },
     Step(StartEvent),
     /// Wine is running and the game is loading.
     Launched { pid: u32 },
@@ -176,7 +178,11 @@ pub fn launch_game(app: AppHandle, state: State<'_, GameState>) -> Result<(), St
         let run = || -> rml_core::Result<Outcome> {
             let launcher = LauncherPaths::detect()?;
             let (config, plan) = launch::prepare(&launcher, false)?;
-            emit(GameEvent::Starting);
+            let helper = launch::helper_stamp(&config);
+            let state_file = launcher.state_file();
+            let first_start = helper.is_some()
+                && LauncherState::load(&state_file).map_or(true, |s| s.last_helper != helper);
+            emit(GameEvent::Starting { first_start });
             let (mut child, lock) =
                 launch::start(&config, &plan, &launcher, &mut |step| emit(GameEvent::Step(step)))?;
             emit(GameEvent::Launched { pid: child.id() });
@@ -189,6 +195,13 @@ pub fn launch_game(app: AppHandle, state: State<'_, GameState>) -> Result<(), St
                         LogSignal::Loaded if !loaded => {
                             loaded = true;
                             emit(GameEvent::Running);
+                            // From now on, starts with this helper are quick.
+                            if first_start {
+                                if let Ok(mut state) = LauncherState::load(&state_file) {
+                                    state.last_helper = helper.clone();
+                                    let _ = state.save(&state_file);
+                                }
+                            }
                         }
                         LogSignal::Crashed => crashed = true,
                         LogSignal::Loaded => {}

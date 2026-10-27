@@ -800,6 +800,7 @@ mod tests {
         *c.transport.platform.borrow_mut() = "windows".into();
         LauncherState {
             pending_platform_restore: Some(PendingRestore::new("macos".into(), "test")),
+            ..Default::default()
         }
         .save(&launcher.state_file())
         .unwrap();

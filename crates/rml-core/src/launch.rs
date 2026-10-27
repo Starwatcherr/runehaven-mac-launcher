@@ -262,6 +262,16 @@ pub fn prepare(launcher: &LauncherPaths, force: bool) -> Result<(Config, LaunchP
     Ok((config, plan))
 }
 
+/// Identifies the Mac helper a start uses: its path and modification time.
+/// The first start with a new one takes longer (on an M5 Pro about 30
+/// seconds), because macOS checks it and Rosetta translates it once.
+pub fn helper_stamp(config: &Config) -> Option<String> {
+    let path = config.macfix_dylib.as_ref()?;
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let secs = modified.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    Some(format!("{}@{secs}", path.display()))
+}
+
 /// Steps on the way to a running game, for progress messages.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "step", rename_all = "snake_case")]
