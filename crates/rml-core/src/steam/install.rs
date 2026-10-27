@@ -632,7 +632,7 @@ mod tests {
                 std::fs::write(&m, DOWNLOADING).unwrap();
                 let m2 = m.clone();
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(60));
+                    std::thread::sleep(Duration::from_millis(400));
                     std::fs::write(&m2, READY).unwrap();
                 });
             }
@@ -751,7 +751,7 @@ mod tests {
                 std::fs::write(&m, DOWNLOADING).unwrap();
                 let m2 = m.clone();
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(60));
+                    std::thread::sleep(Duration::from_millis(400));
                     std::fs::write(&m2, READY).unwrap();
                 });
             }
@@ -859,10 +859,10 @@ mod tests {
                 append(&log, PREPARING);
                 let (m, log, started) = (m.clone(), log.clone(), started.clone());
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(80));
+                    std::thread::sleep(Duration::from_millis(400));
                     started.store(true, Ordering::SeqCst);
                     append(&log, DOWNLOAD_STARTED);
-                    std::thread::sleep(Duration::from_millis(80));
+                    std::thread::sleep(Duration::from_millis(400));
                     std::fs::write(&m, READY).unwrap();
                     append(&log, FINISHED);
                 });
@@ -955,7 +955,7 @@ mod tests {
                 append(&log, "[x] AppID 2676030 moving from \"a\" to \"b\"\n[x] Finished moving install folder (345226541 bytes, 615 files)\n");
                 let log = log.clone();
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(60));
+                    std::thread::sleep(Duration::from_millis(400));
                     append(&log, "[x] AppID 2676030 state changed : Update Required,Fully Installed,Files Missing,\n");
                     append(&log, "[x] AppID 2676030 scheduler finished : removed from schedule (result No Error, state 0xc) \n");
                 });
