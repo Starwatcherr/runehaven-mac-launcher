@@ -281,6 +281,8 @@ pub enum StartEvent {
     PrefixReady,
     RetinaChanged { on: bool },
     InputFixPlaced,
+    /// The save games could not be backed up; the game starts anyway.
+    BackupFailed { message: String },
 }
 
 /// Creates the Wine prefix if it does not exist yet.
@@ -333,6 +335,11 @@ pub fn start(
         if ensure_inputfix(dll, &plan.game_dir)? {
             on_event(StartEvent::InputFixPlaced);
         }
+    }
+    // A copy of the save games before every start, in case one gets damaged.
+    let backups = launcher.root.join("backups/saves");
+    if let Err(e) = prefix::backup_saves(&plan.prefix, &backups, prefix::SAVE_BACKUPS) {
+        on_event(StartEvent::BackupFailed { message: e.to_string() });
     }
     spawn(plan, launcher)
 }

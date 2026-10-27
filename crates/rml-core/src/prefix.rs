@@ -211,6 +211,46 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
+/// How many save game backups are kept.
+pub const SAVE_BACKUPS: usize = 10;
+
+/// Packs the save games of `prefix` into `backups/saves-<time>.zip` and
+/// deletes all but the newest `keep`. Returns the new backup, or `None`
+/// when there are no save games yet.
+pub fn backup_saves(prefix: &Path, backups: &Path, keep: usize) -> Result<Option<PathBuf>> {
+    let Some(saves) = saves_dir(prefix).filter(|d| d.is_dir()) else {
+        return Ok(None);
+    };
+    fs::create_dir_all(backups).ctx(|| format!("creating {}", backups.display()))?;
+    let zip = crate::util::free_path(backups, &format!("saves-{}", utc_stamp()), "zip");
+    let status = Command::new("/usr/bin/ditto")
+        .args(["-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent"])
+        .arg(&saves)
+        .arg(&zip)
+        .status()
+        .ctx(|| "running ditto".into())?;
+    if !status.success() {
+        return Err(Error::Config("could not pack the save games".into()));
+    }
+    let mut all: Vec<PathBuf> = fs::read_dir(backups)
+        .ctx(|| format!("reading {}", backups.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("saves-") && n.ends_with(".zip"))
+        })
+        .collect();
+    // The time stamp in the name sorts oldest first.
+    all.sort();
+    let excess = all.len().saturating_sub(keep);
+    for old in &all[..excess] {
+        let _ = fs::remove_file(old);
+    }
+    Ok(Some(zip))
+}
+
 /// Whether `path` is a Wine prefix (for example a Whisky or CrossOver bottle).
 pub fn looks_like_prefix(path: &Path) -> bool {
     path.join("drive_c").is_dir() && path.join("system.reg").is_file()
@@ -308,5 +348,22 @@ mod tests {
         fs::write(tmp.path().join("system.reg"), "WINE REGISTRY").unwrap();
         assert!(looks_like_prefix(tmp.path()));
         assert_eq!(new_prefix_in(tmp.path()), tmp.path().join("Runehaven Wine"));
+    }
+
+    #[test]
+    fn save_backups_keep_only_the_newest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let prefix = tmp.path().join("prefix");
+        let backups = tmp.path().join("backups");
+        assert!(backup_saves(&prefix, &backups, 2).unwrap().is_none(), "no saves yet");
+        fs::create_dir_all(prefix.join("drive_c/users/crossover")).unwrap();
+        let saves = saves_dir(&prefix).unwrap();
+        fs::create_dir_all(&saves).unwrap();
+        fs::write(saves.join("saves.dat"), "progress").unwrap();
+        for _ in 0..3 {
+            assert!(backup_saves(&prefix, &backups, 2).unwrap().unwrap().exists());
+        }
+        let left = fs::read_dir(&backups).unwrap().count();
+        assert_eq!(left, 2);
     }
 }

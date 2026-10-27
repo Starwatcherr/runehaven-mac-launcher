@@ -98,6 +98,7 @@ footer { display: flex; justify-content: space-between; align-items: flex-end; g
 /* messages sit above the launch button, where the picture leaves room */
 .note { position: absolute; left: 0; right: 0; bottom: calc(100% + 10px); color: var(--muted); font-size: 13px; text-align: center; }
 .note.err { color: var(--red); }
+.note .link { font-size: 13px; }
 
 .dialog-back { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(8, 9, 12, 0.72); }
 .dialog-back[hidden] { display: none; }
@@ -138,6 +139,9 @@ footer { display: flex; justify-content: space-between; align-items: flex-end; g
 .page-note { color: var(--muted); font-size: 13px; margin: 0; max-width: 560px; }
 .group .page-note { margin-top: 10px; }
 .about-name { font-family: "Pixelify Sans", sans-serif; font-weight: 700; font-size: 22px; margin: 0 0 4px; }
+.update-note { color: var(--warn); font-size: 13px; line-height: 15px; text-decoration: none; }
+.update-note:hover, .update-note:focus-visible { color: var(--text); text-decoration: underline; }
+.about-update { color: var(--warn); margin: 0 0 8px; }
 .about-name .version { color: var(--muted); font-weight: 500; font-size: 16px; margin-left: 6px; }
 .about-text { margin: 10px 0 0; }
 .group .by { margin: 0; }

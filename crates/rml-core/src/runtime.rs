@@ -156,6 +156,20 @@ pub enum RuntimeEvent {
     Done,
 }
 
+/// Runtimes of other versions the launcher downloaded earlier into `dir`.
+/// One being there while the current version is not means an update.
+pub fn older_runtimes(dir: &Path, spec: &RuntimeSpec) -> Vec<PathBuf> {
+    fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            fs::read_to_string(p.join(MARKER)).is_ok_and(|id| id.trim() != spec.id)
+        })
+        .collect()
+}
+
 /// Downloads and assembles the runtime unless it is already there. Setting
 /// `cancel` stops the download; what was finished stays for the next try.
 pub fn install(
@@ -225,6 +239,10 @@ pub fn install(
     }
     fs::rename(&staging, &runtime.root)
         .ctx(|| format!("moving runtime into {}", runtime.root.display()))?;
+    // An update leaves the previous version behind; it is no longer used.
+    for old in older_runtimes(&runtime_dir(config, launcher), spec) {
+        let _ = fs::remove_dir_all(old);
+    }
     if !keep_downloads {
         for a in &archives {
             let _ = fs::remove_file(a);
@@ -308,7 +326,7 @@ fn file_matches(path: &Path, sha256: &str) -> Result<bool> {
 
 /// HTTP client that trusts the operating system's certificate store, so
 /// downloads also work behind company proxies with their own certificates.
-fn http_agent() -> ureq::Agent {
+pub(crate) fn http_agent() -> ureq::Agent {
     use ureq::tls::{RootCerts, TlsConfig};
     ureq::Agent::config_builder()
         .tls_config(
@@ -316,7 +334,7 @@ fn http_agent() -> ureq::Agent {
                 .root_certs(RootCerts::PlatformVerifier)
                 .build(),
         )
-        .user_agent(concat!("runehaven-launcher/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("runehaven-mac-launcher/", env!("CARGO_PKG_VERSION")))
         .build()
         .into()
 }
@@ -571,5 +589,19 @@ mod network_tests {
         assert_eq!(libs, vec![app.join("Contents/Resources/wine/lib")]);
         assert_eq!(find_wine(&bin.join("wine")).unwrap().0, bin.join("wine"));
         assert!(find_wine(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn finds_older_runtimes_to_replace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = RuntimeSpec::bundled();
+        let old = tmp.path().join("winecx-old");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join(MARKER), "winecx-old").unwrap();
+        let current = tmp.path().join(&spec.id);
+        fs::create_dir_all(&current).unwrap();
+        fs::write(current.join(MARKER), &spec.id).unwrap();
+        fs::create_dir_all(tmp.path().join("unrelated")).unwrap();
+        assert_eq!(older_runtimes(tmp.path(), &spec), vec![old]);
     }
 }

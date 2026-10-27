@@ -114,6 +114,10 @@
     }
   });
 
+  for (const [id, what] of [["m-saves", "saves"], ["m-backups", "backups"]]) {
+    $(id).addEventListener("click", () => invoke("open_saves", { what }).then(() => sayM("")).catch(e => sayM(String(e), true)));
+  }
+
   $("m-reset").addEventListener("click", async () => {
     if (!await ask("Reset the Wine setup?", "The launcher sets Wine up again from scratch. Save games and game settings are kept, and the old setup stays as a backup.", "Reset")) return;
     startJob("Setting up Wine again, about a minute…");
@@ -142,7 +146,7 @@
   function openUninstall() {
     unNote.textContent = "";
     unNote.style.color = "";
-    $("un-runtime").textContent = "WineCX, DXMT and libraries" + (status.runtime.bytes ? ` · ${fmtSize(status.runtime.bytes)}` : "");
+    $("un-runtime").textContent = "WineCX, DXMT, libraries and downloads" + (status.runtime.bytes ? ` · ${fmtSize(status.runtime.bytes)}` : "");
     setChoice("runtime", true, false);
     if (status.own_prefix) {
       $("un-prefix").textContent = "Your save games are packed onto the desktop first" + (status.prefix.bytes ? ` · ${fmtSize(status.prefix.bytes)}` : "");
@@ -358,6 +362,12 @@
 
   // --- About ----------------------------------------------------------------------------------------
   window.__TAURI__.app.getVersion().then(v => { $("version").textContent = v; }).catch(() => {});
+  invoke("launcher_update").then(found => {
+    if (!found) return;
+    $("home-update").textContent = `Version ${found.version} of the launcher is available.`;
+    $("about-new").textContent = found.version;
+    $("home-update").hidden = $("about-update").hidden = false;
+  }).catch(() => {});
   document.addEventListener("click", e => {
     const link = e.target.closest("[data-link]");
     if (link) invoke("open_link", { which: link.dataset.link });

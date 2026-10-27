@@ -22,6 +22,7 @@
       <div class="names">
         <h1 class="title">Runehaven Mac Launcher</h1>
         <div class="by">Project by Starwatcherr. Unofficial, not affiliated with Cikoria.</div>
+        <button class="link update-note" data-link="releases" id="home-update" hidden></button>
       </div>
     </header>
 
@@ -49,6 +50,8 @@
       <ul class="rows">
         <li><span><span class="name">Game files</span><span class="detail" id="m-game">Checking…</span></span>
           <span class="row-actions"><button class="btn tiny frame" id="m-update" hidden>Update</button><button class="btn tiny frame" id="m-verify">Verify</button><button class="btn tiny frame" id="m-uninstall">Uninstall</button></span></li>
+        <li><span><span class="name">Save games</span><span class="detail">Backed up before every start, the last 10 are kept.</span></span>
+          <span class="row-actions"><button class="btn tiny frame" id="m-saves">Open</button><button class="btn tiny frame" id="m-backups">Backups</button></span></li>
       </ul>
     </section>
     <section class="group" aria-labelledby="m-wine-h">
@@ -99,6 +102,9 @@
         <li><span><span class="name">Install locations</span>
           <span class="detail">Steam library, Wine runtime and Wine setup.</span></span>
           <button class="btn tiny frame" id="open-locations">Change…</button></li>
+        <li><span><span class="name">Check for launcher updates</span>
+          <span class="detail">Asks GitHub for new versions when the launcher opens. Nothing else is sent.</span></span>
+          <button class="toggle" role="switch" data-key="update-check" aria-checked="true" aria-label="Check for launcher updates"></button></li>
       </ul>
     </section>
     <section class="group" aria-labelledby="debug-h">
@@ -122,6 +128,7 @@
     <h1 class="page-title">About</h1>
     <section class="group">
       <p class="about-name">Runehaven Mac Launcher <span class="version" id="version"></span></p>
+      <p class="about-update" hidden id="about-update">Version <span id="about-new"></span> is out. <button class="link" data-link="releases">Download it from GitHub</button></p>
       <p class="by">Project by Starwatcherr. Unofficial, not affiliated with Cikoria.</p>
       <p class="about-text">Plays the Windows version of <button class="link" data-link="steam-store">Runehaven</button> on Apple Silicon Macs through Wine.</p>
     </section>
@@ -198,12 +205,12 @@
     <h2 id="un-h">Uninstall Runehaven Mac Launcher?</h2>
     <p id="un-text">The launcher's settings are removed and the app moves to the Trash. What else should go?</p>
     <ul class="rows choices">
-      <li><span><span class="name">Wine runtime</span><span class="detail" id="un-runtime">WineCX, DXMT and libraries</span></span>
-        <button class="toggle" role="switch" data-choice="runtime" aria-checked="true" aria-label="Remove the Wine runtime"></button></li>
+      <li><span><span class="name">Wine runtime</span><span class="detail" id="un-runtime">WineCX, DXMT, libraries and downloads</span></span>
+        <button class="toggle" role="switch" data-choice="runtime" aria-checked="true" aria-label="Remove the Wine runtime and its downloads"></button></li>
       <li><span><span class="name">Wine setup</span><span class="detail" id="un-prefix">Your save games are packed onto the desktop first.</span></span>
         <button class="toggle" role="switch" data-choice="prefix" aria-checked="true" aria-label="Remove the Wine setup"></button></li>
-      <li><span><span class="name">Logs and downloads</span><span class="detail">Only needed for bug reports.</span></span>
-        <button class="toggle" role="switch" data-choice="logs" aria-checked="true" aria-label="Remove logs and downloads"></button></li>
+      <li><span><span class="name">Logs</span><span class="detail">Only needed for bug reports.</span></span>
+        <button class="toggle" role="switch" data-choice="logs" aria-checked="true" aria-label="Remove the logs"></button></li>
       <li><span><span class="name">Runehaven itself</span><span class="detail" id="un-game">Uninstalled through Steam.</span></span>
         <button class="toggle" role="switch" data-choice="game" aria-checked="false" aria-label="Uninstall Runehaven too"></button></li>
     </ul>

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use rml_core::config::Config;
 use rml_core::doctor;
 use rml_core::paths::LauncherPaths;
+use rml_core::update::{self, NewVersion};
 use serde::Serialize;
 
 /// What the settings page shows.
@@ -15,10 +16,12 @@ pub struct Settings {
     width: u32,
     height: u32,
     hud: bool,
+    #[serde(rename = "update-check")]
+    update_check: bool,
 }
 
 /// The settings the page may change; paths are set elsewhere.
-const PAGE_KEYS: [&str; 4] = ["fullscreen", "retina", "size", "hud"];
+const PAGE_KEYS: [&str; 5] = ["fullscreen", "retina", "size", "hud", "update-check"];
 
 fn load() -> rml_core::Result<(LauncherPaths, Config)> {
     let launcher = LauncherPaths::detect()?;
@@ -35,7 +38,25 @@ pub fn get_settings() -> Result<Settings, String> {
         width: c.display.width,
         height: c.display.height,
         hud: c.hud(),
+        update_check: !c.skip_update_check,
     })
+}
+
+/// A newer launcher on GitHub, if the player has not turned the check off.
+/// Network problems count as "nothing new"; the launcher works offline.
+#[tauri::command]
+pub async fn launcher_update(app: tauri::AppHandle) -> Option<NewVersion> {
+    let current = app.package_info().version.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_, config) = load().ok()?;
+        if config.skip_update_check {
+            return None;
+        }
+        update::check(&current).ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Changes one setting; it applies the next time the game starts.
@@ -86,6 +107,7 @@ pub async fn export_logs() -> Result<String, String> {
 pub fn open_link(which: String) -> Result<(), String> {
     let url = match which.as_str() {
         "steam-store" => "https://store.steampowered.com/app/2676030/Runehaven/",
+        "releases" => update::RELEASES_PAGE,
         _ => return Err(format!("unknown link `{which}`")),
     };
     std::process::Command::new("/usr/bin/open")

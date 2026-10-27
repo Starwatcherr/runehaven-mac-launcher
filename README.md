@@ -12,7 +12,8 @@ Play the Windows version of [Runehaven](https://store.steampowered.com/app/26760
 
 - Installs everything Runehaven needs with one button: Rosetta 2, the Windows version of the game through your own Steam, and a Wine runtime with DXMT (Direct3D 11 → Metal).
 - Starts the game in macOS full screen, with a fix for mouse input that Unity games need under Wine.
-- Keeps things in order: update, verify or uninstall the game, set Wine up again, move the game to another Steam library, export logs for bug reports.
+- Keeps things in order: update, verify or uninstall the game, update or set Wine up again, move the game to another Steam library, export logs for bug reports.
+- Backs up your save games before every start and tells you when a new launcher version is out.
 
 ## Requirements
 
@@ -43,7 +44,7 @@ Want things somewhere else? **Custom…** next to Install requirements (or **Set
 
 ## Your save games
 
-They live in the launcher's Wine setup: `~/Library/Application Support/Runehaven Launcher/prefix`. **Maintenance → Remove launcher data** and **Uninstall Runehaven Mac Launcher** pack them into a ZIP on your desktop before anything is deleted.
+They live in the launcher's Wine setup: `~/Library/Application Support/Runehaven Launcher/prefix`. Before every start the launcher packs them into a ZIP in `backups/saves` next to it and keeps the last 10; **Maintenance → Save games** opens both folders. **Maintenance → Remove launcher data** and **Uninstall Runehaven Mac Launcher** pack them into a ZIP on your desktop before anything is deleted.
 
 ## Known issues
 
@@ -62,7 +63,7 @@ They live in the launcher's Wine setup: `~/Library/Application Support/Runehaven
 2. The game runs through Wine ([WineCX 24.0.7](https://github.com/Sikarugir-App/Engines)) with [DXMT 0.80](https://github.com/3Shain/dxmt) and Rosetta 2.
 3. A small input fix (`version.dll` next to the game) gives Unity the raw mouse input it expects, which Wine does not provide yet. A small Mac helper switches the game window into macOS full screen and keeps the game's cursor.
 
-The launcher sends no data anywhere. It only talks to your Steam and downloads the Wine runtime from GitHub.
+The launcher sends no data anywhere. It talks to your Steam, downloads the Wine runtime from GitHub and asks GitHub whether a new launcher version is out (**Settings → Check for launcher updates** turns that off).
 
 ## Building from source
 

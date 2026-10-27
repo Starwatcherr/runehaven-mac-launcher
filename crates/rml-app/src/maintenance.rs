@@ -253,6 +253,28 @@ pub fn uninstall_launcher(app: AppHandle, choice: UninstallChoice, game: bool) {
 /// Quits the app and moves it to the Trash once it has quit. If moving is
 /// not possible, Finder shows the app so it can be dragged there. In a
 /// development build (not an `.app`) it only quits.
+/// Shows the save games (`saves`) or their backups (`backups`) in Finder.
+#[tauri::command]
+pub fn open_saves(what: String) -> Result<(), String> {
+    let run = || -> rml_core::Result<PathBuf> {
+        let launcher = LauncherPaths::detect()?;
+        let config = Config::load(&launcher.config_file())?;
+        let dir = if what == "backups" {
+            launcher.root.join("backups/saves")
+        } else {
+            rml_core::prefix::saves_dir(&prefix_path(&config, &launcher))
+                .filter(|d| d.is_dir())
+                .ok_or_else(|| Error::Config("There are no save games yet. Start Runehaven once.".into()))?
+        };
+        if !dir.is_dir() {
+            return Err(Error::Config("There are no backups yet. One is made before every start.".into()));
+        }
+        Ok(dir)
+    };
+    let dir = run().map_err(|e| e.to_string())?;
+    std::process::Command::new("/usr/bin/open").arg(&dir).status().map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn quit_and_trash(app: AppHandle) {
     let bundle = std::env::current_exe()

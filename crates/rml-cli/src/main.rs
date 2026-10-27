@@ -156,7 +156,8 @@ enum ConfigCmd {
     Show,
     /// Change one setting: wine, library-dirs (comma-separated), prefix,
     /// inputfix, macfix (paths, or `default` for the launcher's own), fullscreen, retina
-    /// (true/false), size (WIDTHxHEIGHT), hud (true/false: FPS overlay).
+    /// (true/false), size (WIDTHxHEIGHT), hud (true/false: FPS overlay),
+    /// update-check (true/false: look for new launcher versions on GitHub).
     Set { key: String, value: String },
 }
 
@@ -406,6 +407,9 @@ fn print_start_event(event: launch::StartEvent) {
             eprintln!("Retina mode {}.", if on { "on" } else { "off" })
         }
         launch::StartEvent::InputFixPlaced => eprintln!("Placed the input fix next to the game."),
+        launch::StartEvent::BackupFailed { message } => {
+            eprintln!("Could not back up the save games: {message}")
+        }
     }
 }
 

@@ -2784,6 +2784,7 @@ name = "rml-core"
 version = "0.1.0-beta.1"
 dependencies = [
  "libc",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.1",

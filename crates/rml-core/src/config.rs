@@ -27,6 +27,8 @@ pub struct Config {
     /// Steam library (its number) to install the game into; Steam's default
     /// if `None`.
     pub steam_library: Option<u32>,
+    /// Don't ask GitHub for new launcher versions.
+    pub skip_update_check: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -111,6 +113,7 @@ impl Config {
                     self.extra_env.remove(HUD_VAR);
                 }
             }
+            "update-check" => self.skip_update_check = !flag(value)?,
             "fullscreen" => self.display.fullscreen = flag(value)?,
             "retina" => self.display.retina = flag(value)?,
             "size" => {

@@ -7,7 +7,7 @@ use std::time::Duration;
 use rml_core::config::Config;
 use rml_core::launch::{self, LogSignal, PlayerLogWatch, StartEvent};
 use rml_core::paths::{LauncherPaths, SteamPaths};
-use rml_core::runtime::{Runtime, RuntimeSpec};
+use rml_core::runtime::{self, Runtime, RuntimeSpec};
 use rml_core::state::LauncherState;
 use rml_core::steam::{MacTransport, Transport};
 use rml_core::{doctor, Error};
@@ -22,18 +22,24 @@ pub struct Requirement {
     /// `ok`, `missing` (the launcher can do something about it) or `failed`.
     pub state: &'static str,
     detail: String,
+    /// Missing only because a newer version is waiting.
+    update: bool,
 }
 
 fn ok(id: &'static str, name: &'static str, detail: impl Into<String>) -> Requirement {
-    Requirement { id, name, state: "ok", detail: detail.into() }
+    Requirement { id, name, state: "ok", detail: detail.into(), update: false }
 }
 
 fn missing(id: &'static str, name: &'static str, detail: impl Into<String>) -> Requirement {
-    Requirement { id, name, state: "missing", detail: detail.into() }
+    Requirement { id, name, state: "missing", detail: detail.into(), update: false }
+}
+
+fn update(id: &'static str, name: &'static str, detail: impl Into<String>) -> Requirement {
+    Requirement { id, name, state: "missing", detail: detail.into(), update: true }
 }
 
 fn failed(id: &'static str, name: &'static str, detail: impl Into<String>) -> Requirement {
-    Requirement { id, name, state: "failed", detail: detail.into() }
+    Requirement { id, name, state: "failed", detail: detail.into(), update: false }
 }
 
 fn rosetta() -> Requirement {
@@ -60,7 +66,7 @@ fn game() -> Requirement {
     const NAME: &str = "Runehaven (Windows version)";
     match launch::locate_game() {
         Ok((_, m, _)) if m.is_ready() => ok("game", NAME, "Installed through Steam"),
-        Ok((_, m, _)) if m.update_pending() => missing("game", NAME, "Update available"),
+        Ok((_, m, _)) if m.update_pending() => update("game", NAME, "Update required"),
         Ok(_) => missing("game", NAME, "Steam is working on it"),
         Err(Error::GameNotInstalled) => missing("game", NAME, "Not installed"),
         Err(Error::SteamNotInstalled(_)) => missing("game", NAME, "Needs Steam"),
@@ -77,6 +83,12 @@ fn runtime(launcher: &LauncherPaths) -> Requirement {
     let spec = RuntimeSpec::bundled();
     if Runtime::locate(&config, launcher, &spec).is_installed() {
         ok("runtime", NAME, "Installed")
+    } else if !runtime::older_runtimes(&runtime::runtime_dir(&config, launcher), &spec).is_empty() {
+        update(
+            "runtime",
+            NAME,
+            format!("Update required, {} MB", spec.download_size() >> 20),
+        )
     } else {
         missing(
             "runtime",

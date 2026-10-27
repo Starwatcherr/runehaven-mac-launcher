@@ -31,10 +31,28 @@ let progress = null;     // of the current setup step, 0 to 1, null when unknown
 
 const escape = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-function say(text, isError = false) {
+function say(text, isError = false, action = null) {
   note.textContent = text;
   note.classList.toggle("err", isError);
+  if (action) {
+    const button = document.createElement("button");
+    button.className = "link";
+    button.textContent = action.label;
+    button.addEventListener("click", action.run);
+    note.append(" ", button);
+  }
 }
+
+// After a crash: everything a bug report needs, in one ZIP on the desktop.
+const exportLogs = { label: "Export logs", run: async () => {
+  say("Packing the logs…");
+  try {
+    const path = await invoke("export_logs");
+    say(`Saved ${path.split("/").pop()} on your desktop. Attach it to your bug report.`);
+  } catch (e) {
+    say(String(e), true);
+  }
+} };
 
 // Rows are built once and then only changed where needed, so a spinning mark keeps turning.
 function renderList() {
@@ -64,17 +82,22 @@ function render() {
   renderList();
   const allMet = reqs.length > 0 && reqs.every(r => r.state === "ok");
   const anyFailed = Object.values(work).some(w => w.failed !== undefined);
+  // Only newer versions missing: it is an update, not an installation.
+  const onlyUpdates = reqs.some(r => r.state !== "ok") && reqs.every(r => r.state === "ok" || r.update);
   install.disabled = !installing && (allMet || reqs.length === 0);
   install.classList.toggle("active", installing && !cancelling);
   install.style.setProperty("--fill", `${Math.round((progress ?? 0) * 24) / 24 * 100}%`);
   installState.textContent = cancelling ? "Cancelling…"
     : installing ? `Installing…${progress === null ? "" : ` ${Math.round(progress * 100)}%`}`
-    : reqs.length === 0 ? "Checking…" : allMet ? "Requirements met" : anyFailed ? "Try again" : "Install requirements";
+    : reqs.length === 0 ? "Checking…" : allMet ? "Requirements met" : anyFailed ? "Try again"
+    : onlyUpdates ? "Update requirements" : "Install requirements";
   launch.disabled = installing || (!allMet && !running);
   $("custom").hidden = allMet || installing || reqs.length === 0;
   launch.classList.toggle("active", running);
   launchState.textContent = !running ? "Launch Game" : loaded ? "Running" : "Starting…";
-  if (!running && !note.classList.contains("err")) say(allMet || installing || reqs.length === 0 ? "" : "Install the requirements first.");
+  if (!running && !note.classList.contains("err")) {
+    say(allMet || installing || reqs.length === 0 ? "" : onlyUpdates ? "Update the requirements first." : "Install the requirements first.");
+  }
 }
 
 async function refresh() {
@@ -210,13 +233,13 @@ listen("game", ({ payload: e }) => {
     case "crashed":
       running = loaded = false;
       closeExit();
-      say("Runehaven crashed. The log is saved in the launcher's logs folder.", true);
+      say("Runehaven crashed.", true, exportLogs);
       break;
     case "exited":
       running = loaded = false;
       closeExit();
       if (closing || e.code === 0 || e.code === null) say("");
-      else say(`Runehaven closed unexpectedly (exit code ${e.code}).`, true);
+      else say(`Runehaven closed unexpectedly (exit code ${e.code}).`, true, exportLogs);
       break;
     case "failed":
       running = loaded = false;
