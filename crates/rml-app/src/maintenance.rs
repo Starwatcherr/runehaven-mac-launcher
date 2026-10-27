@@ -5,14 +5,14 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use rhl_core::config::Config;
-use rhl_core::launch::{self, prefix_path};
-use rhl_core::maintain::{self, disk_usage, UninstallChoice};
-use rhl_core::paths::LauncherPaths;
-use rhl_core::runtime::{Runtime, RuntimeSpec};
-use rhl_core::state::LauncherState;
-use rhl_core::steam::{self, InstallEvent, InstallOptions, SteamClient};
-use rhl_core::Error;
+use rml_core::config::Config;
+use rml_core::launch::{self, prefix_path};
+use rml_core::maintain::{self, disk_usage, UninstallChoice};
+use rml_core::paths::LauncherPaths;
+use rml_core::runtime::{Runtime, RuntimeSpec};
+use rml_core::state::LauncherState;
+use rml_core::steam::{self, InstallEvent, InstallOptions, SteamClient};
+use rml_core::Error;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -43,7 +43,7 @@ pub async fn maintenance_status() -> Result<Status, String> {
         .map_err(|e| e.to_string())?
 }
 
-fn status() -> rhl_core::Result<Status> {
+fn status() -> rml_core::Result<Status> {
     let launcher = LauncherPaths::detect()?;
     let config = Config::load(&launcher.config_file()).unwrap_or_default();
 
@@ -107,7 +107,7 @@ enum JobEvent {
 pub fn spawn_job(
     app: AppHandle,
     job: &'static str,
-    run: impl FnOnce(&dyn Fn(&str)) -> rhl_core::Result<String> + Send + 'static,
+    run: impl FnOnce(&dyn Fn(&str)) -> rml_core::Result<String> + Send + 'static,
 ) {
     std::thread::spawn(move || {
         let emit = |event: JobEvent| {

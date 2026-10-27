@@ -1,12 +1,12 @@
-<p align="center"><img src="assets/runehaven-r.gif" width="128" alt="Runehaven R"></p>
+<p align="center"><img src="crates/rml-app/icons/icon.png" width="128" alt="Runehaven Mac Launcher icon"></p>
 
-# Runehaven Launcher
+# Runehaven Mac Launcher
 
 An **unofficial** launcher that lets you play the Windows version of [Runehaven](https://store.steampowered.com/app/2676030/) on Apple Silicon Macs. Project by Starwatcherr.
 
 > Not affiliated with or endorsed by Cikoria Studio. You need your own copy of Runehaven on Steam.
 
-**Status:** early development. There is no app yet, only the core and a command-line test tool (`rhl`).
+**Status:** early development. There is no app yet, only the core and a command-line test tool (`rml`).
 
 ## How it works
 
@@ -22,20 +22,20 @@ Requires [Rust](https://rustup.rs) on macOS.
 
 ```sh
 cargo build --release
-./target/release/rhl doctor
+./target/release/rml doctor
 ```
 
 | Command | What it does |
 |---|---|
-| `rhl doctor` | Checks Mac, Rosetta, Steam and the game installation |
-| `rhl steam wait` | Starts Steam if needed and waits until it answers |
-| `rhl steam platform` | Shows Steam's platform setting |
-| `rhl steam status` | Steam's own status of Runehaven |
-| `rhl steam recover` | Restores Steam's platform after an interrupted install |
-| `rhl game locate` | Where Steam keeps Runehaven and its state |
-| `rhl game install` | Installs the Windows build through Steam |
-| `rhl game launch` | Starts the game (needs a Wine runtime in the config) |
-| `rhl config show` / `set` | Shows or changes the configuration |
+| `rml doctor` | Checks Mac, Rosetta, Steam and the game installation |
+| `rml steam wait` | Starts Steam if needed and waits until it answers |
+| `rml steam platform` | Shows Steam's platform setting |
+| `rml steam status` | Steam's own status of Runehaven |
+| `rml steam recover` | Restores Steam's platform after an interrupted install |
+| `rml game locate` | Where Steam keeps Runehaven and its state |
+| `rml game install` | Installs the Windows build through Steam |
+| `rml game launch` | Starts the game (needs a Wine runtime in the config) |
+| `rml config show` / `set` | Shows or changes the configuration |
 
 ## Credits
 

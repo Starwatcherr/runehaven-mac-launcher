@@ -198,7 +198,7 @@ fn newest(dir: &Path, keep: impl Fn(&str) -> bool, count: usize) -> Vec<PathBuf>
 /// its path: the logs of the latest game starts, Unity's latest crash
 /// reports, the system checks and the launcher configuration.
 pub fn export_logs(launcher: &LauncherPaths, dest_dir: &Path) -> Result<PathBuf> {
-    let name = format!("Runehaven Launcher logs {}", utc_stamp());
+    let name = format!("Runehaven Mac Launcher logs {}", utc_stamp());
     let staging = std::env::temp_dir().join(&name);
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(staging.join("logs")).ctx(|| format!("creating {}", staging.display()))?;

@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
-use rhl_core::config::Config;
-use rhl_core::doctor;
-use rhl_core::paths::LauncherPaths;
+use rml_core::config::Config;
+use rml_core::doctor;
+use rml_core::paths::LauncherPaths;
 use serde::Serialize;
 
 /// What the settings page shows.
@@ -20,7 +20,7 @@ pub struct Settings {
 /// The settings the page may change; paths are set elsewhere.
 const PAGE_KEYS: [&str; 4] = ["fullscreen", "retina", "size", "hud"];
 
-fn load() -> rhl_core::Result<(LauncherPaths, Config)> {
+fn load() -> rml_core::Result<(LauncherPaths, Config)> {
     let launcher = LauncherPaths::detect()?;
     let config = Config::load(&launcher.config_file())?;
     Ok((launcher, config))

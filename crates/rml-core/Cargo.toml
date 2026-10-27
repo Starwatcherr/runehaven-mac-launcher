@@ -1,6 +1,6 @@
 [package]
-name = "rhl-core"
-description = "Core logic of the unofficial Runehaven Launcher for macOS: Steam control, runtime and game launch."
+name = "rml-core"
+description = "Core logic of the unofficial Runehaven Mac Launcher: Steam control, runtime and game launch."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

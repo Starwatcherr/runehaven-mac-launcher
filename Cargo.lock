@@ -2744,29 +2744,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rhl-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "ctrlc",
- "rhl-core",
- "serde_json",
-]
-
-[[package]]
-name = "rhl-core"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "tempfile",
- "thiserror 2.0.21",
- "ureq",
-]
-
-[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2784,12 +2761,35 @@ dependencies = [
 name = "rml-app"
 version = "0.1.0"
 dependencies = [
- "rhl-core",
+ "rml-core",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+]
+
+[[package]]
+name = "rml-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "ctrlc",
+ "rml-core",
+ "serde_json",
+]
+
+[[package]]
+name = "rml-core"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ureq",
 ]
 
 [[package]]

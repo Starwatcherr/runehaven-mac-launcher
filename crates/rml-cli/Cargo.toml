@@ -1,17 +1,17 @@
 [package]
-name = "rhl-cli"
-description = "Command-line front end for testing the Runehaven Launcher core."
+name = "rml-cli"
+description = "Command-line tool of the Runehaven Mac Launcher, for testing and troubleshooting."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "rhl"
+name = "rml"
 path = "src/main.rs"
 
 [dependencies]
-rhl-core = { path = "../rhl-core" }
+rml-core = { path = "../rml-core" }
 clap = { version = "4", features = ["derive"] }
 ctrlc = "3"
 serde_json.workspace = true

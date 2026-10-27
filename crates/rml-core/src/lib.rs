@@ -1,4 +1,4 @@
-//! Core of the unofficial Runehaven Launcher for macOS.
+//! Core of the unofficial Runehaven Mac Launcher.
 //!
 //! * [`steam`]: finds the game in the user's Steam libraries, talks to the
 //!   running Steam client and installs the Windows build through it.

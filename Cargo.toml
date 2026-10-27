@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/rhl-core", "crates/rhl-cli", "crates/rml-app"]
+members = ["crates/rml-core", "crates/rml-cli", "crates/rml-app"]
 
 [workspace.package]
 version = "0.1.0"

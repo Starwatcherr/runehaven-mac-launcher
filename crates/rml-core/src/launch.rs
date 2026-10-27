@@ -55,7 +55,7 @@ impl ResolvedRuntime {
                 let rt = Runtime::locate(config, launcher, &RuntimeSpec::bundled());
                 if !rt.is_installed() {
                     return Err(Error::Config(
-                        "the Wine runtime is not installed yet (run `rhl runtime install`)".into(),
+                        "the Wine runtime is not installed yet (install it from the launcher, or run `rml runtime install`)".into(),
                     ));
                 }
                 Self {

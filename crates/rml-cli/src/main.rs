@@ -1,4 +1,4 @@
-//! `rhl`: command-line front end for testing the launcher core before the
+//! `rml`: command-line front end for testing the launcher core before the
 //! app's interface exists.
 
 use std::path::PathBuf;
@@ -6,18 +6,18 @@ use std::process::ExitCode;
 use std::sync::atomic::Ordering;
 
 use clap::{Parser, Subcommand};
-use rhl_core::config::Config;
-use rhl_core::paths::LauncherPaths;
-use rhl_core::steam::{
+use rml_core::config::Config;
+use rml_core::paths::LauncherPaths;
+use rml_core::steam::{
     self, library, InstallEvent, InstallOptions, ReadyStatus, SteamClient, RUNEHAVEN_APPID,
 };
-use rhl_core::{doctor, launch, maintain, prefix, runtime, Error, Result};
+use rml_core::{doctor, launch, maintain, prefix, runtime, Error, Result};
 
 #[derive(Parser)]
 #[command(
-    name = "rhl",
+    name = "rml",
     version,
-    about = "Runehaven Launcher (unofficial) – core test tool. Project by Starwatcherr."
+    about = "Runehaven Mac Launcher (unofficial) – command-line tool. Project by Starwatcherr."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -116,7 +116,7 @@ enum GameCmd {
     Locate,
     /// Install the Windows build through Steam.
     Install {
-        /// Steam library number (see `rhl doctor`); Steam's default otherwise.
+        /// Steam library number (see `rml doctor`); Steam's default otherwise.
         #[arg(long)]
         library: Option<u32>,
         /// Install even while other Steam downloads are running.
@@ -131,7 +131,7 @@ enum GameCmd {
     Verify,
     /// Remove the game through Steam (save games stay in the prefix).
     Uninstall,
-    /// Move the game into another Steam library (number from `rhl doctor`).
+    /// Move the game into another Steam library (number from `rml doctor`).
     Move {
         #[arg(long)]
         library: u32,
@@ -254,7 +254,7 @@ fn steam_cmd(command: SteamCmd, launcher: &LauncherPaths) -> Result<()> {
             Ok(())
         }
         SteamCmd::Downloads => {
-            let paths = rhl_core::paths::SteamPaths::detect()?;
+            let paths = rml_core::paths::SteamPaths::detect()?;
             let libs = library::libraries(&paths)?;
             let active = library::active_apps(&libs, RUNEHAVEN_APPID);
             let pending = library::pending_apps(&libs, RUNEHAVEN_APPID);
@@ -274,7 +274,7 @@ fn steam_cmd(command: SteamCmd, launcher: &LauncherPaths) -> Result<()> {
 fn game_cmd(command: GameCmd, launcher: &LauncherPaths) -> Result<()> {
     match command {
         GameCmd::Locate => {
-            let paths = rhl_core::paths::SteamPaths::detect()?;
+            let paths = rml_core::paths::SteamPaths::detect()?;
             let libs = library::libraries(&paths)?;
             match library::find_app(&libs, RUNEHAVEN_APPID)? {
                 None => println!("Runehaven is not installed in any Steam library."),

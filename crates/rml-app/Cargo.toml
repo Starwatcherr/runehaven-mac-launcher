@@ -1,6 +1,6 @@
 [package]
 name = "rml-app"
-description = "The app of the Runehaven Mac Launcher: an HTML interface on top of rhl-core."
+description = "The app of the Runehaven Mac Launcher: an HTML interface on top of rml-core."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,7 +10,7 @@ authors.workspace = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-rhl-core = { path = "../rhl-core" }
+rml-core = { path = "../rml-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde.workspace = true

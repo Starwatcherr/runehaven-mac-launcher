@@ -1,6 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Runehaven Mac Launcher",
+  "mainBinaryName": "Runehaven Mac Launcher",
   "version": "0.1.0",
   "identifier": "io.github.starwatcherr.rml",
   "build": {
@@ -25,7 +26,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": [
+      "app"
+    ],
     "category": "Game",
     "copyright": "Project by Starwatcherr. Unofficial, not affiliated with Cikoria.",
     "icon": [
@@ -37,6 +40,10 @@
     ],
     "macOS": {
       "minimumSystemVersion": "14.0"
+    },
+    "resources": {
+      "../../inputfix/build/version.dll": "version.dll",
+      "../../macfix/build/app/rml-macfix.dylib": "rml-macfix.dylib"
     }
   }
 }

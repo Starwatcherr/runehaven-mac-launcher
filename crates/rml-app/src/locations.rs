@@ -6,13 +6,13 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use rhl_core::config::Config;
-use rhl_core::launch::{self, prefix_path};
-use rhl_core::paths::{LauncherPaths, SteamPaths};
-use rhl_core::prefix;
-use rhl_core::runtime::{self, runtime_dir};
-use rhl_core::steam::{self, library, InstallOptions, SteamClient};
-use rhl_core::Error;
+use rml_core::config::Config;
+use rml_core::launch::{self, prefix_path};
+use rml_core::paths::{LauncherPaths, SteamPaths};
+use rml_core::prefix;
+use rml_core::runtime::{self, runtime_dir};
+use rml_core::steam::{self, library, InstallOptions, SteamClient};
+use rml_core::Error;
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
@@ -44,7 +44,7 @@ pub struct Locations {
     prefix: Place,
 }
 
-fn load() -> rhl_core::Result<(LauncherPaths, Config)> {
+fn load() -> rml_core::Result<(LauncherPaths, Config)> {
     let launcher = LauncherPaths::detect()?;
     let config = Config::load(&launcher.config_file())?;
     Ok((launcher, config))
@@ -57,7 +57,7 @@ pub async fn install_locations() -> Result<Locations, String> {
         .map_err(|e| e.to_string())?
 }
 
-fn locations() -> rhl_core::Result<Locations> {
+fn locations() -> rml_core::Result<Locations> {
     let (launcher, config) = load()?;
     let libraries = match SteamPaths::detect() {
         Ok(steam) => {
@@ -96,7 +96,7 @@ fn locations() -> rhl_core::Result<Locations> {
 /// picked path. Takes effect for the next installation or game start.
 #[tauri::command]
 pub fn set_install_location(kind: String, mode: String, value: Option<String>) -> Result<String, String> {
-    let run = || -> rhl_core::Result<String> {
+    let run = || -> rml_core::Result<String> {
         let (launcher, mut config) = load()?;
         let _lock = launch::RunLock::acquire(&launcher)?;
         let path = value.as_deref().map(PathBuf::from);

@@ -1,5 +1,5 @@
 //! The Runehaven Mac Launcher app. The interface is the HTML page in `ui/`;
-//! the work is done by `rhl-core`, reached through the commands in
+//! the work is done by `rml-core`, reached through the commands in
 //! [`commands`].
 
 mod commands;

@@ -4,12 +4,12 @@ use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use rhl_core::config::Config;
-use rhl_core::launch::{self, LogSignal, PlayerLogWatch, StartEvent};
-use rhl_core::paths::{LauncherPaths, SteamPaths};
-use rhl_core::runtime::{Runtime, RuntimeSpec};
-use rhl_core::steam::{MacTransport, Transport};
-use rhl_core::{doctor, Error};
+use rml_core::config::Config;
+use rml_core::launch::{self, LogSignal, PlayerLogWatch, StartEvent};
+use rml_core::paths::{LauncherPaths, SteamPaths};
+use rml_core::runtime::{Runtime, RuntimeSpec};
+use rml_core::steam::{MacTransport, Transport};
+use rml_core::{doctor, Error};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -135,7 +135,7 @@ pub fn game_running(state: State<'_, GameState>) -> bool {
 }
 
 fn with_config(
-    f: fn(&Config, &LauncherPaths) -> rhl_core::Result<()>,
+    f: fn(&Config, &LauncherPaths) -> rml_core::Result<()>,
 ) -> Result<(), String> {
     let run = || {
         let launcher = LauncherPaths::detect()?;
@@ -173,7 +173,7 @@ pub fn launch_game(app: AppHandle, state: State<'_, GameState>) -> Result<(), St
         let emit = |event: GameEvent| {
             let _ = app.emit("game", event);
         };
-        let run = || -> rhl_core::Result<Outcome> {
+        let run = || -> rml_core::Result<Outcome> {
             let launcher = LauncherPaths::detect()?;
             let (config, plan) = launch::prepare(&launcher, false)?;
             emit(GameEvent::Starting);

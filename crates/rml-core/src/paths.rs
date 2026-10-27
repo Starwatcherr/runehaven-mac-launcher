@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
+/// Kept from the project's first name, so existing installations keep their
+/// runtime, prefix and save games.
 pub const APP_DIR_NAME: &str = "Runehaven Launcher";
 
 fn home() -> Result<PathBuf> {

@@ -4,11 +4,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rhl_core::config::Config;
-use rhl_core::paths::LauncherPaths;
-use rhl_core::runtime::{self, RuntimeEvent, RuntimeSpec};
-use rhl_core::steam::{self, InstallEvent, InstallOptions, ReadyStatus, SteamClient};
-use rhl_core::{doctor, launch, Error};
+use rml_core::config::Config;
+use rml_core::paths::LauncherPaths;
+use rml_core::runtime::{self, RuntimeEvent, RuntimeSpec};
+use rml_core::steam::{self, InstallEvent, InstallOptions, ReadyStatus, SteamClient};
+use rml_core::{doctor, launch, Error};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
