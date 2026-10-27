@@ -1,6 +1,7 @@
 //! Starting Runehaven from the Steam-managed installation through Wine.
 
-use std::fs::File;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -9,6 +10,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::error::{Error, IoContext, Result};
+use crate::lock::JobLock;
 use crate::paths::{to_wine_path, LauncherPaths, SteamPaths};
 use crate::prefix;
 use crate::runtime::{Runtime, RuntimeSpec};
@@ -17,6 +19,9 @@ use crate::util::utc_stamp;
 
 pub const GAME_EXE: &str = "Runehaven.exe";
 const INPUTFIX_NAME: &str = "version.dll";
+/// Text in every build of the launcher's input fix (its log line), which
+/// tells it apart from another `version.dll`, a mod for example.
+const INPUTFIX_MARK: &[u8] = b"Runehaven Launcher input fix";
 const MACFIX_NAME: &str = "rml-macfix.dylib";
 
 /// Wine DLL settings: prefer the input-fix `version.dll` next to the game,
@@ -138,14 +143,19 @@ impl LaunchPlan {
         // Unity takes the size in pixels; in Retina mode a point is 2×2 pixels
         // on Apple's built-in and most external displays.
         let scale = if d.retina { 2 } else { 1 };
+        let pixels = |points: u32| {
+            points
+                .checked_mul(scale)
+                .ok_or_else(|| Error::Config(format!("the window size {}x{} is too large", d.width, d.height)))
+        };
         let args = vec![
             GAME_EXE.to_string(),
             "-screen-fullscreen".into(),
             if unity_fullscreen { "1" } else { "0" }.into(),
             "-screen-width".into(),
-            (d.width * scale).to_string(),
+            pixels(d.width)?.to_string(),
             "-screen-height".into(),
-            (d.height * scale).to_string(),
+            pixels(d.height)?.to_string(),
             "-force-d3d11".into(),
             "-logFile".into(),
             to_wine_path(&player_log),
@@ -174,53 +184,53 @@ impl LaunchPlan {
     }
 }
 
+/// What putting the input fix in place did.
+#[derive(Debug, PartialEq)]
+pub struct Placed {
+    /// Another `version.dll` was there (a mod, say); its copy went here.
+    pub moved_aside: Option<PathBuf>,
+}
+
+/// Whether `found` is a build of the launcher's own input fix: the one this
+/// launcher ships (`ours`) or an older one.
+pub(crate) fn is_own_inputfix(found: &[u8], ours: Option<&[u8]>) -> bool {
+    ours == Some(found) || found.windows(INPUTFIX_MARK.len()).any(|w| w == INPUTFIX_MARK)
+}
+
 /// Copies the input-fix DLL next to the game if it is missing or differs.
-/// Returns `true` when a copy was made.
-pub fn ensure_inputfix(dll: &Path, game_dir: &Path) -> Result<bool> {
-    let wanted = std::fs::read(dll).ctx(|| format!("reading input fix {}", dll.display()))?;
+/// Another `version.dll` is copied into `backups` first. The new file is
+/// written beside the old one and then renamed over it, so a game that still
+/// has the old one open keeps it, and a link in its place is replaced, not
+/// followed. Returns `None` when nothing had to change.
+pub fn ensure_inputfix(dll: &Path, game_dir: &Path, backups: &Path) -> Result<Option<Placed>> {
+    let wanted = fs::read(dll).ctx(|| format!("reading input fix {}", dll.display()))?;
     let target = game_dir.join(INPUTFIX_NAME);
-    if std::fs::read(&target).ok().as_deref() == Some(wanted.as_slice()) {
-        return Ok(false);
+    let found = fs::read(&target).ok();
+    if found.as_deref() == Some(wanted.as_slice()) {
+        return Ok(None);
     }
-    std::fs::write(&target, &wanted).ctx(|| format!("writing {}", target.display()))?;
-    Ok(true)
-}
-
-/// Guards against starting the game twice.
-pub struct RunLock {
-    path: PathBuf,
-}
-
-impl RunLock {
-    pub fn acquire(launcher: &LauncherPaths) -> Result<Self> {
-        let path = launcher.root.join("run.pid");
-        if let Ok(pid) = std::fs::read_to_string(&path) {
-            if pid_alive(pid.trim()) {
-                return Err(Error::AlreadyRunning);
-            }
+    let moved_aside = match found {
+        Some(other) if !is_own_inputfix(&other, None) => {
+            fs::create_dir_all(backups).ctx(|| format!("creating {}", backups.display()))?;
+            let copy = crate::util::free_path(backups, &format!("game version.dll {}", utc_stamp()), "dll");
+            fs::write(&copy, other).ctx(|| format!("writing {}", copy.display()))?;
+            Some(copy)
         }
-        Ok(Self { path })
+        _ => None,
+    };
+    let tmp = game_dir.join(format!(".{INPUTFIX_NAME}.rml-{}", std::process::id()));
+    let _ = fs::remove_file(&tmp);
+    let written = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(&wanted).and_then(|()| f.sync_all()))
+        .and_then(|()| fs::rename(&tmp, &target));
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e).ctx(|| format!("writing {}", target.display()));
     }
-
-    pub fn record(&self, pid: u32) -> Result<()> {
-        std::fs::write(&self.path, pid.to_string())
-            .ctx(|| format!("writing {}", self.path.display()))
-    }
-
-    pub fn release(self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-fn pid_alive(pid: &str) -> bool {
-    !pid.is_empty()
-        && pid.chars().all(|c| c.is_ascii_digit())
-        && Command::new("/bin/kill")
-            .args(["-0", pid])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+    Ok(Some(Placed { moved_aside }))
 }
 
 /// A helper file shipped with the launcher: next to the program or in
@@ -238,7 +248,7 @@ pub fn locate_game() -> Result<(Library, AppManifest, PathBuf)> {
     let libs = library::libraries(&SteamPaths::detect()?)?;
     let (lib, manifest) =
         library::find_app(&libs, RUNEHAVEN_APPID)?.ok_or(Error::GameNotInstalled)?;
-    let game_dir = lib.steamapps().join("common").join(&manifest.installdir);
+    let game_dir = manifest.game_dir(&lib)?;
     Ok((lib, manifest, game_dir))
 }
 
@@ -281,6 +291,8 @@ pub enum StartEvent {
     PrefixReady,
     RetinaChanged { on: bool },
     InputFixPlaced,
+    /// Another `version.dll` was in the game folder; a copy is at `to`.
+    ForeignDllMovedAside { to: PathBuf },
     /// The save games could not be backed up; the game starts anyway.
     BackupFailed { message: String },
 }
@@ -311,13 +323,15 @@ pub fn ensure_prefix(
 }
 
 /// Puts the prefix, the Retina setting and the input fix in place and starts
-/// Wine. The caller keeps the returned child and the lock until the game exits.
+/// Wine. The caller holds `lock` from before [`prepare`] until the game
+/// exits, then calls [`JobLock::game_exited`].
 pub fn start(
     config: &Config,
     plan: &LaunchPlan,
     launcher: &LauncherPaths,
+    lock: &JobLock,
     on_event: &mut dyn FnMut(StartEvent),
-) -> Result<(Child, RunLock)> {
+) -> Result<Child> {
     ensure_prefix(config, launcher, on_event)?;
     let rt = ResolvedRuntime::resolve(config, launcher)?;
     if prefix::ensure_retina(
@@ -332,16 +346,19 @@ pub fn start(
         });
     }
     if let Some(dll) = &config.inputfix_dll {
-        if ensure_inputfix(dll, &plan.game_dir)? {
+        if let Some(placed) = ensure_inputfix(dll, &plan.game_dir, &launcher.root.join("backups"))? {
             on_event(StartEvent::InputFixPlaced);
+            if let Some(to) = placed.moved_aside {
+                on_event(StartEvent::ForeignDllMovedAside { to });
+            }
         }
     }
-    // A copy of the save games before every start, in case one gets damaged.
+    // A copy of the save games before a start, in case one gets damaged.
     let backups = launcher.root.join("backups/saves");
-    if let Err(e) = prefix::backup_saves(&plan.prefix, &backups, prefix::SAVE_BACKUPS) {
+    if let Err(e) = prefix::backup_saves(&plan.prefix, &backups) {
         on_event(StartEvent::BackupFailed { message: e.to_string() });
     }
-    spawn(plan, launcher)
+    spawn(plan, launcher, lock)
 }
 
 /// Asks the game to close, like clicking the close button of its window.
@@ -446,10 +463,9 @@ impl PlayerLogWatch {
     }
 }
 
-/// Starts Wine. The caller keeps the returned child and the lock until the
+/// Starts Wine. The caller keeps the returned child and `lock` until the
 /// game exits.
-pub fn spawn(plan: &LaunchPlan, launcher: &LauncherPaths) -> Result<(Child, RunLock)> {
-    let lock = RunLock::acquire(launcher)?;
+pub fn spawn(plan: &LaunchPlan, launcher: &LauncherPaths, lock: &JobLock) -> Result<Child> {
     std::fs::create_dir_all(launcher.logs()).ctx(|| "creating log folder".into())?;
     std::fs::create_dir_all(&plan.prefix)
         .ctx(|| format!("creating prefix {}", plan.prefix.display()))?;
@@ -465,8 +481,8 @@ pub fn spawn(plan: &LaunchPlan, launcher: &LauncherPaths) -> Result<(Child, RunL
         .stderr(log_err)
         .spawn()
         .ctx(|| format!("starting {}", plan.wine.display()))?;
-    lock.record(child.id())?;
-    Ok((child, lock))
+    lock.record_game(child.id())?;
+    Ok(child)
 }
 
 #[cfg(test)]
@@ -569,11 +585,45 @@ mod tests {
     #[test]
     fn inputfix_is_copied_only_when_needed() {
         let tmp = tempfile::tempdir().unwrap();
+        let (game, backups) = (tmp.path().join("game"), tmp.path().join("backups"));
+        std::fs::create_dir_all(&game).unwrap();
         let dll = tmp.path().join("fix.dll");
-        std::fs::write(&dll, b"MZ fix").unwrap();
-        assert!(ensure_inputfix(&dll, tmp.path()).unwrap());
-        assert!(!ensure_inputfix(&dll, tmp.path()).unwrap());
-        std::fs::write(tmp.path().join("version.dll"), b"old").unwrap();
-        assert!(ensure_inputfix(&dll, tmp.path()).unwrap());
+        std::fs::write(&dll, b"MZ Runehaven Launcher input fix 2").unwrap();
+        let placed = |p: Option<PathBuf>| Some(Placed { moved_aside: p });
+        assert_eq!(ensure_inputfix(&dll, &game, &backups).unwrap(), placed(None));
+        assert_eq!(ensure_inputfix(&dll, &game, &backups).unwrap(), None);
+
+        // An older build of the launcher's own is simply replaced.
+        std::fs::write(game.join("version.dll"), b"MZ Runehaven Launcher input fix 1").unwrap();
+        assert_eq!(ensure_inputfix(&dll, &game, &backups).unwrap(), placed(None));
+
+        // Someone else's is kept as a copy first.
+        std::fs::write(game.join("version.dll"), b"MZ a mod").unwrap();
+        let copy = ensure_inputfix(&dll, &game, &backups).unwrap().unwrap().moved_aside.unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"MZ a mod");
+        assert_eq!(std::fs::read(game.join("version.dll")).unwrap(), std::fs::read(&dll).unwrap());
+
+        // A link in its place is replaced, its target stays as it was.
+        let elsewhere = tmp.path().join("elsewhere.dll");
+        std::fs::write(&elsewhere, b"MZ not to be touched").unwrap();
+        std::fs::remove_file(game.join("version.dll")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, game.join("version.dll")).unwrap();
+        ensure_inputfix(&dll, &game, &backups).unwrap();
+        assert_eq!(std::fs::read(&elsewhere).unwrap(), b"MZ not to be touched");
+        assert!(!std::fs::symlink_metadata(game.join("version.dll")).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_dir(&game).unwrap().count(), 1, "no temporary file is left");
+    }
+
+    #[test]
+    fn absurd_window_sizes_are_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wine = tmp.path().join("wine");
+        std::fs::write(&wine, "").unwrap();
+        std::fs::write(tmp.path().join(GAME_EXE), "").unwrap();
+        let mut config = Config::default();
+        config.runtime.wine = Some(wine);
+        config.display.width = u32::MAX;
+        let launcher = LauncherPaths::at(tmp.path().join("l"));
+        assert!(matches!(LaunchPlan::build(&config, &launcher, tmp.path()), Err(Error::Config(_))));
     }
 }

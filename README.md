@@ -13,7 +13,7 @@ Play the Windows version of [Runehaven](https://store.steampowered.com/app/26760
 - Installs everything Runehaven needs with one button: Rosetta 2, the Windows version of the game through your own Steam, and a Wine runtime with DXMT (Direct3D 11 → Metal).
 - Starts the game in macOS full screen, with a fix for mouse input that Unity games need under Wine.
 - Keeps things in order: update, verify or uninstall the game, update or set Wine up again, move the game to another Steam library, export logs for bug reports.
-- Backs up your save games before every start and tells you when a new launcher version is out.
+- Backs up your save games before a start when they have changed, and tells you when a new launcher version is out.
 
 ## Requirements
 
@@ -44,7 +44,7 @@ Want things somewhere else? **Custom…** next to Install requirements (or **Set
 
 ## Your save games
 
-They live in the launcher's Wine setup: `~/Library/Application Support/Runehaven Launcher/prefix`. Before every start the launcher packs them into a ZIP in `backups/saves` next to it and keeps the last 10; **Maintenance → Save games** opens both folders. **Maintenance → Remove launcher data** and **Uninstall Runehaven Mac Launcher** pack them into a ZIP on your desktop before anything is deleted.
+They live in the launcher's Wine setup: `~/Library/Application Support/Runehaven Launcher/prefix`. Before a start, if they have changed, the launcher packs them into a ZIP in `backups/saves` next to it. It keeps the last 10, and of older ones one per day for two weeks; **Maintenance → Save games** opens both folders. **Maintenance → Remove launcher data** and **Uninstall Runehaven Mac Launcher** pack them into a ZIP on your desktop before anything is deleted.
 
 ## Known issues
 

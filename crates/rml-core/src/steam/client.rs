@@ -93,28 +93,41 @@ fn spawn_disclaimed(program: &Path, argument: &str) -> std::io::Result<libc::pid
 }
 
 /// The numeric id of the macOS user running the launcher.
-fn current_uid() -> Option<u32> {
-    let out = Command::new("/usr/bin/id").arg("-u").output().ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+fn current_uid() -> u32 {
+    // SAFETY: getuid has no preconditions and cannot fail.
+    unsafe { libc::getuid() }
 }
 
-/// Steam uses one fixed pipe for all macOS users. If Steam last ran in
-/// another account, the pipe still belongs to that account and this user's
-/// Steam cannot receive commands through it.
-fn foreign_pipe_owner() -> Option<u32> {
-    use std::os::unix::fs::MetadataExt;
-    let owner = std::fs::symlink_metadata(STEAM_PIPE).ok()?.uid();
-    (Some(owner) != current_uid()).then_some(owner)
+/// What is wrong with Steam's command pipe at `path`, if anything. Steam
+/// uses one fixed pipe for all macOS users. If Steam last ran in another
+/// account, the pipe still belongs to that account and this user's Steam
+/// cannot receive commands through it. Anything but a plain pipe of this
+/// user is refused, so commands never end up in someone else's file.
+fn pipe_problem(path: &Path) -> Option<String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    let shown = path.display();
+    if meta.uid() != current_uid() {
+        return Some(format!(
+            "{shown} belongs to another macOS user (uid {}), so Steam in this account cannot \
+             receive commands. Quit Steam in all accounts, remove the file from the account \
+             that owns it (rm {shown}) and start Steam here again.",
+            meta.uid()
+        ));
+    }
+    if !meta.file_type().is_fifo() || meta.nlink() != 1 {
+        return Some(format!(
+            "{shown} is not Steam's command pipe. Quit Steam, remove the file (rm {shown}) and \
+             start Steam again."
+        ));
+    }
+    None
 }
 
 impl Transport for MacTransport {
     fn forward(&self, argument: &str) -> Result<()> {
-        if let Some(owner) = foreign_pipe_owner() {
-            return Err(Error::Config(format!(
-                "{STEAM_PIPE} belongs to another macOS user (uid {owner}), so Steam in this \
-                 account cannot receive commands. Quit Steam in all accounts, remove the file \
-                 from the account that owns it (rm {STEAM_PIPE}) and start Steam here again."
-            )));
+        if let Some(problem) = pipe_problem(Path::new(STEAM_PIPE)) {
+            return Err(Error::Config(problem));
         }
         let pid = spawn_disclaimed(&self.paths.bootstrapper, argument)
             .ctx(|| format!("starting {}", self.paths.bootstrapper.display()))?;
@@ -135,11 +148,8 @@ impl Transport for MacTransport {
 
     fn is_running(&self) -> bool {
         // Only this user's Steam counts; other accounts may run their own.
-        let mut cmd = Command::new("/usr/bin/pgrep");
-        if let Some(uid) = current_uid() {
-            cmd.args(["-U", &uid.to_string()]);
-        }
-        cmd.args(["-x", "steam_osx"])
+        Command::new("/usr/bin/pgrep")
+            .args(["-U", &current_uid().to_string(), "-x", "steam_osx"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -534,6 +544,27 @@ pub(crate) mod fake {
 mod tests {
     use super::fake::*;
     use super::*;
+
+    #[test]
+    fn only_a_plain_pipe_of_this_user_is_used() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe = tmp.path().join("steam.pipe");
+        assert_eq!(pipe_problem(&pipe), None, "no pipe yet: Steam creates it");
+        let c_path = std::ffi::CString::new(pipe.to_str().unwrap()).unwrap();
+        // SAFETY: a valid path string for mkfifo.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        assert_eq!(pipe_problem(&pipe), None);
+        let second_name = tmp.path().join("other-name");
+        std::fs::hard_link(&pipe, &second_name).unwrap();
+        assert!(pipe_problem(&pipe).is_some(), "a pipe with a second name is refused");
+        std::fs::remove_file(&second_name).unwrap();
+        std::fs::remove_file(&pipe).unwrap();
+        std::fs::write(&pipe, "").unwrap();
+        assert!(pipe_problem(&pipe).is_some(), "a plain file is refused");
+        std::fs::remove_file(&pipe).unwrap();
+        std::os::unix::fs::symlink(tmp.path(), &pipe).unwrap();
+        assert!(pipe_problem(&pipe).is_some(), "a link is refused");
+    }
 
     #[test]
     fn reads_and_sets_platform() {

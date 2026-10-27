@@ -196,26 +196,38 @@ fn newest(dir: &Path, keep: impl Fn(&str) -> bool, count: usize) -> Vec<PathBuf>
 
 /// Packs what a bug report needs into one ZIP file in `dest_dir` and returns
 /// its path: the logs of the latest game starts, Unity's latest crash
-/// reports, the system checks and the launcher configuration.
-pub fn export_logs(launcher: &LauncherPaths, dest_dir: &Path) -> Result<PathBuf> {
+/// reports (their memory dumps only with `crash_dumps`), the system checks
+/// and the launcher configuration, plus a README saying what is inside. The
+/// user's home folder in paths is shown as `~`, and the values of the user's
+/// own environment variables are hidden.
+pub fn export_logs(launcher: &LauncherPaths, dest_dir: &Path, crash_dumps: bool) -> Result<PathBuf> {
     let name = format!("Runehaven Mac Launcher logs {}", utc_stamp());
-    let staging = std::env::temp_dir().join(&name);
+    let staging = std::env::temp_dir().join(format!("rml-export-{}", std::process::id())).join(&name);
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(staging.join("logs")).ctx(|| format!("creating {}", staging.display()))?;
-    let copy = |from: &Path, to: &Path| -> Result<()> {
-        let status = Command::new("/bin/cp")
-            .arg("-R")
-            .arg(from)
-            .arg(to)
+    let packed = stage_report(launcher, &staging, crash_dumps).and_then(|()| {
+        fs::create_dir_all(dest_dir).ctx(|| format!("creating {}", dest_dir.display()))?;
+        let zip = free_path(dest_dir, &name, "zip");
+        let status = Command::new("/usr/bin/ditto")
+            .args(["-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent"])
+            .arg(&staging)
+            .arg(&zip)
             .status()
-            .ctx(|| format!("copying {}", from.display()))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(Error::Config(format!("copying {} failed", from.display())))
+            .ctx(|| "running ditto".into())?;
+        if !status.success() {
+            let _ = fs::remove_file(&zip);
+            return Err(Error::Config(format!("packing {} failed", zip.display())));
         }
-    };
+        Ok(zip)
+    });
+    if let Some(parent) = staging.parent() {
+        let _ = fs::remove_dir_all(parent);
+    }
+    packed
+}
 
+fn stage_report(launcher: &LauncherPaths, staging: &Path, crash_dumps: bool) -> Result<()> {
+    let redact = Redactor::for_this_user();
     let logs = launcher.logs();
     let starts = |prefix: &'static str| move |n: &str| n.starts_with(prefix) && n.ends_with(".log");
     for f in newest(&logs, starts("player-"), EXPORTED_STARTS)
@@ -223,39 +235,118 @@ pub fn export_logs(launcher: &LauncherPaths, dest_dir: &Path) -> Result<PathBuf>
         .chain(newest(&logs, starts("wine-"), EXPORTED_STARTS))
         .chain(newest(&logs, |n| n == "wineboot.log" || n == "wine-settings.log", 2))
     {
-        copy(&f, &staging.join("logs"))?;
+        redact.copy_tree(&f, &staging.join("logs").join(f.file_name().unwrap_or_default()), true)?;
     }
 
     let config = Config::load(&launcher.config_file()).unwrap_or_default();
     let users = prefix_path(&config, launcher).join("drive_c/users");
+    let mut crashes = 0;
     for user in fs::read_dir(&users).into_iter().flatten().flatten() {
-        let crashes = user.path().join("Temp/Cikoria/Runehaven/Crashes");
-        let latest = newest(&crashes, |n| n.starts_with("Crash_"), EXPORTED_CRASHES);
-        if !latest.is_empty() {
-            fs::create_dir_all(staging.join("crashes")).ctx(|| "creating crashes folder".into())?;
-        }
-        for dir in latest {
-            copy(&dir, &staging.join("crashes"))?;
+        let dir = user.path().join("Temp/Cikoria/Runehaven/Crashes");
+        for crash in newest(&dir, |n| n.starts_with("Crash_"), EXPORTED_CRASHES) {
+            let to = staging.join("crashes").join(crash.file_name().unwrap_or_default());
+            redact.copy_tree(&crash, &to, crash_dumps)?;
+            crashes += 1;
         }
     }
 
-    fs::write(staging.join("system.txt"), report()).ctx(|| "writing system.txt".into())?;
-    let config_text = serde_json::to_string_pretty(&config).expect("config serializes");
-    fs::write(staging.join("config.json"), config_text).ctx(|| "writing config.json".into())?;
+    fs::write(staging.join("system.txt"), redact.text(&report())).ctx(|| "writing system.txt".into())?;
+    let config_text = serde_json::to_string_pretty(&shareable(config)).expect("config serializes");
+    fs::write(staging.join("config.json"), redact.text(&config_text)).ctx(|| "writing config.json".into())?;
+    let dumps = match (crashes, crash_dumps) {
+        (0, _) => "There were no crash reports.",
+        (_, true) => "Unity's crash reports, with their memory dumps (crash.dmp).",
+        (_, false) => "Unity's crash reports, without their memory dumps.",
+    };
+    let readme = format!(
+        "Runehaven Mac Launcher: logs for a bug report\n\n\
+         logs/         the game's log (player-...) and Wine's log (wine-...) of the latest starts\n\
+         crashes/      {dumps}\n\
+         system.txt    macOS, Rosetta 2, Steam and where the game is installed\n\
+         config.json   the launcher's settings; values of your own environment variables are hidden\n\n\
+         Your home folder in paths is shown as ~. Look through the files before you share them.\n"
+    );
+    fs::write(staging.join("README.txt"), readme).ctx(|| "writing README.txt".into())
+}
 
-    fs::create_dir_all(dest_dir).ctx(|| format!("creating {}", dest_dir.display()))?;
-    let zip = free_path(dest_dir, &name, "zip");
-    let status = Command::new("/usr/bin/ditto")
-        .args(["-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent"])
-        .arg(&staging)
-        .arg(&zip)
-        .status()
-        .ctx(|| "running ditto".into())?;
-    let _ = fs::remove_dir_all(&staging);
-    if !status.success() {
-        return Err(Error::Config(format!("packing {} failed", zip.display())));
+/// The settings as they go into a bug report: environment variables the
+/// launcher itself knows keep their values, others only their names.
+fn shareable(mut config: Config) -> Config {
+    const KNOWN: [&str; 5] = ["MTL_", "DXMT_", "WINE", "RHL_", "RML_"];
+    for (key, value) in config.extra_env.iter_mut() {
+        if !KNOWN.iter().any(|k| key.starts_with(k)) {
+            *value = "(hidden)".into();
+        }
     }
-    Ok(zip)
+    config
+}
+
+/// Replaces the user's home folder in text with `~`, in Mac paths
+/// (`/Users/name`) and Wine's Windows paths (`\Users\name`).
+struct Redactor {
+    pairs: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+impl Redactor {
+    fn for_this_user() -> Self {
+        let home = std::env::var("HOME").unwrap_or_default();
+        Self::for_home(home.trim_end_matches('/'))
+    }
+
+    fn for_home(home: &str) -> Self {
+        let mut pairs = Vec::new();
+        if home.len() > 1 {
+            pairs.push((home.as_bytes().to_vec(), b"~".to_vec()));
+            let windows = home.replace('/', "\\");
+            pairs.push((windows.as_bytes().to_vec(), b"\\~".to_vec()));
+            pairs.push((windows.replace('\\', "\\\\").into_bytes(), b"\\\\~".to_vec()));
+        }
+        Self { pairs }
+    }
+
+    fn bytes(&self, data: &[u8]) -> Vec<u8> {
+        let mut out = data.to_vec();
+        for (from, to) in &self.pairs {
+            let mut result = Vec::with_capacity(out.len());
+            let mut rest = out.as_slice();
+            while let Some(at) = rest.windows(from.len()).position(|w| w == from.as_slice()) {
+                result.extend_from_slice(&rest[..at]);
+                result.extend_from_slice(to);
+                rest = &rest[at + from.len()..];
+            }
+            result.extend_from_slice(rest);
+            out = result;
+        }
+        out
+    }
+
+    fn text(&self, text: &str) -> Vec<u8> {
+        self.bytes(text.as_bytes())
+    }
+
+    /// Copies a file or folder with the home folder replaced in every file.
+    /// Memory dumps (`.dmp`) are copied unchanged with `dumps`, else left out.
+    fn copy_tree(&self, from: &Path, to: &Path, dumps: bool) -> Result<()> {
+        let meta = fs::symlink_metadata(from).ctx(|| format!("reading {}", from.display()))?;
+        if meta.is_dir() {
+            fs::create_dir_all(to).ctx(|| format!("creating {}", to.display()))?;
+            for entry in fs::read_dir(from).ctx(|| format!("reading {}", from.display()))?.flatten() {
+                self.copy_tree(&entry.path(), &to.join(entry.file_name()), dumps)?;
+            }
+        } else if meta.is_file() {
+            let is_dump = from.extension().is_some_and(|e| e.eq_ignore_ascii_case("dmp"));
+            if is_dump && !dumps {
+                return Ok(());
+            }
+            if let Some(dir) = to.parent() {
+                fs::create_dir_all(dir).ctx(|| format!("creating {}", dir.display()))?;
+            }
+            let data = fs::read(from).ctx(|| format!("reading {}", from.display()))?;
+            let data = if is_dump { data } else { self.bytes(&data) };
+            fs::write(to, data).ctx(|| format!("writing {}", to.display()))?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -278,13 +369,36 @@ mod tests {
         fs::create_dir_all(&crash).unwrap();
         fs::write(crash.join("crash.dmp"), "dump").unwrap();
 
-        let zip = export_logs(&launcher, tmp.path()).unwrap();
+        fs::write(crash.join("error.log"), "error").unwrap();
+
+        let zip = export_logs(&launcher, tmp.path(), false).unwrap();
         let list = Command::new("/usr/bin/unzip").arg("-l").arg(&zip).output().unwrap();
         let list = String::from_utf8_lossy(&list.stdout);
         assert_eq!(list.matches("player-").count(), EXPORTED_STARTS);
         assert!(list.contains("player-202610211.log"), "the newest start is in");
         assert!(!list.contains("player-202610200.log"), "the oldest is left out");
-        assert!(list.contains("crashes/Crash_1/crash.dmp"));
-        assert!(list.contains("system.txt") && list.contains("config.json"));
+        assert!(list.contains("crashes/Crash_1/error.log"));
+        assert!(!list.contains("crash.dmp"), "no memory dump unless asked for");
+        assert!(list.contains("system.txt") && list.contains("config.json") && list.contains("README.txt"));
+
+        let zip = export_logs(&launcher, tmp.path(), true).unwrap();
+        let list = Command::new("/usr/bin/unzip").arg("-l").arg(&zip).output().unwrap();
+        assert!(String::from_utf8_lossy(&list.stdout).contains("crashes/Crash_1/crash.dmp"));
+    }
+
+    #[test]
+    fn home_folder_and_own_values_are_hidden() {
+        let r = Redactor::for_home("/Users/kian");
+        let log = "open /Users/kian/Library/x and Z:\\Users\\kian\\Library and \"Z:\\\\Users\\\\kian\"";
+        assert_eq!(
+            String::from_utf8(r.text(log)).unwrap(),
+            "open ~/Library/x and Z:\\~\\Library and \"Z:\\\\~\""
+        );
+        let mut config = Config::default();
+        config.extra_env.insert("MTL_HUD_ENABLED".into(), "1".into());
+        config.extra_env.insert("MY_TOKEN".into(), "secret".into());
+        let shared = shareable(config);
+        assert_eq!(shared.extra_env["MTL_HUD_ENABLED"], "1");
+        assert_eq!(shared.extra_env["MY_TOKEN"], "(hidden)");
     }
 }

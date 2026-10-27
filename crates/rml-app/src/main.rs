@@ -13,6 +13,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::GameState::default())
         .manage(setup::SetupState::default())
+        .setup(|app| {
+            maintenance::restore_steam_platform(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::requirements,
             commands::launch_game,

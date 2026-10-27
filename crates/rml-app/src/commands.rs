@@ -1,11 +1,13 @@
 //! Commands the interface calls, and the `game` event it listens to.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rml_core::config::Config;
 use rml_core::launch::{self, LogSignal, PlayerLogWatch, StartEvent};
+use rml_core::lock::{self, JobLock};
 use rml_core::paths::{LauncherPaths, SteamPaths};
 use rml_core::runtime::{self, Runtime, RuntimeSpec};
 use rml_core::state::LauncherState;
@@ -183,20 +185,26 @@ pub fn launch_game(app: AppHandle, state: State<'_, GameState>) -> Result<(), St
     if state.running.swap(true, Ordering::SeqCst) {
         return Err(Error::AlreadyRunning.to_string());
     }
+    // Steam may still be on Windows after an interrupted task.
+    crate::maintenance::restore_steam_platform(app.clone());
     std::thread::spawn(move || {
         let emit = |event: GameEvent| {
             let _ = app.emit("game", event);
         };
         let run = || -> rml_core::Result<Outcome> {
             let launcher = LauncherPaths::detect()?;
+            // Held while the start changes things; afterwards `run.pid`
+            // keeps other tasks out until the game has exited.
+            let job = JobLock::acquire(&launcher)?;
             let (config, plan) = launch::prepare(&launcher, false)?;
             let helper = launch::helper_stamp(&config);
             let state_file = launcher.state_file();
             let first_start = helper.is_some()
                 && LauncherState::load(&state_file).map_or(true, |s| s.last_helper != helper);
             emit(GameEvent::Starting { first_start });
-            let (mut child, lock) =
-                launch::start(&config, &plan, &launcher, &mut |step| emit(GameEvent::Step(step)))?;
+            let mut child =
+                launch::start(&config, &plan, &launcher, &job, &mut |step| emit(GameEvent::Step(step)))?;
+            drop(job);
             emit(GameEvent::Launched { pid: child.id() });
             // Wine running does not mean the game is up; its own log tells.
             let mut log = PlayerLogWatch::new(&plan.player_log);
@@ -209,34 +217,34 @@ pub fn launch_game(app: AppHandle, state: State<'_, GameState>) -> Result<(), St
                             emit(GameEvent::Running);
                             // From now on, starts with this helper are quick.
                             if first_start {
-                                if let Ok(mut state) = LauncherState::load(&state_file) {
-                                    state.last_helper = helper.clone();
-                                    let _ = state.save(&state_file);
-                                }
+                                let _ = LauncherState::update(&state_file, |s| s.last_helper = helper.clone());
                             }
                         }
                         LogSignal::Crashed => crashed = true,
                         LogSignal::Loaded => {}
                     }
                 }
-                let exited = child.try_wait().map_err(|source| Error::Io {
-                    context: "waiting for Wine".into(),
-                    source,
+                let exited = child.try_wait().map_err(|source| {
+                    lock::game_exited(&launcher);
+                    Error::Io { context: "waiting for Wine".into(), source }
                 })?;
                 if let Some(status) = exited {
                     break status;
                 }
                 std::thread::sleep(Duration::from_millis(500));
             };
-            lock.release();
+            lock::game_exited(&launcher);
             // The crash line can arrive just before the process ends.
             crashed |= log.poll().contains(&LogSignal::Crashed);
             Ok(if crashed { Outcome::Crashed } else { Outcome::Exited(status) })
         };
-        match run() {
-            Ok(Outcome::Exited(status)) => emit(GameEvent::Exited { code: status.code() }),
-            Ok(Outcome::Crashed) => emit(GameEvent::Crashed),
-            Err(e) => emit(GameEvent::Failed { message: e.to_string() }),
+        match catch_unwind(AssertUnwindSafe(run)) {
+            Ok(Ok(Outcome::Exited(status))) => emit(GameEvent::Exited { code: status.code() }),
+            Ok(Ok(Outcome::Crashed)) => emit(GameEvent::Crashed),
+            Ok(Err(e)) => emit(GameEvent::Failed { message: e.to_string() }),
+            Err(_) => emit(GameEvent::Failed {
+                message: "The launcher ran into an internal error. Please export the logs and report it.".into(),
+            }),
         }
         app.state::<GameState>().running.store(false, Ordering::SeqCst);
     });

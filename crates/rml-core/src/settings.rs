@@ -10,6 +10,8 @@
 //!
 //! The values are written into the launcher's prefix with Wine's own
 //! `reg import`, so the registry stays consistent even if Wine is running.
+//! Each value is read into its type and written out anew, so nothing from
+//! the source reaches `reg import` as it was: no other key, no stray line.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,20 +28,30 @@ pub const KEY: &str = r"Software\Cikoria\Runehaven";
 /// so they are not carried over.
 const SKIPPED_PREFIXES: [&str; 2] = ["unity.", "unity_connect."];
 
-/// One registry value, kept in registry-file syntax.
+/// One registry value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Value {
-    /// Decoded name, e.g. `rebinds_h1376817600`.
+    /// Decoded name, e.g. `rebinds_h1376817600`; empty for the default value.
     pub name: String,
-    /// The value's text as it appears in the file (`"name"=dword:…`),
-    /// including continuation lines.
-    pub text: String,
+    pub data: Data,
+}
+
+/// The kinds of data Unity's settings use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Data {
+    /// `"text"` (REG_SZ).
+    String(String),
+    /// `dword:0000002a`.
+    Dword(u32),
+    /// `hex:…` (REG_BINARY), or `hex(N):…` for another type number `N`.
+    Hex { kind: Option<u32>, bytes: Vec<u8> },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
     pub values: Vec<Value>,
-    /// Values left out because Unity uses them only internally.
+    /// Values left out: Unity's own bookkeeping, and anything that is not a
+    /// well-formed value of a known kind.
     pub skipped: usize,
 }
 
@@ -69,52 +81,49 @@ impl Settings {
             }
         }
         let mut settings = Settings::default();
-        let mut current: Option<String> = None;
+        // A value's lines: the first, then continuation lines while the
+        // previous one ends with a backslash.
+        let mut current: Vec<&str> = Vec::new();
         let mut continues = false;
         for line in lines {
             if continues {
-                if let Some(text) = current.as_mut() {
-                    text.push('\n');
-                    text.push_str(line);
-                }
+                current.push(line);
                 continues = line.ends_with('\\');
                 continue;
             }
-            if let Some(text) = current.take() {
-                settings.push(text);
+            if !current.is_empty() {
+                settings.push(&std::mem::take(&mut current));
             }
             let trimmed = line.trim_start();
             if trimmed.starts_with('[') {
                 break; // next key
             }
             if trimmed.starts_with('"') || trimmed.starts_with('@') {
-                current = Some(trimmed.to_string());
+                current.push(trimmed);
                 continues = trimmed.ends_with('\\');
             }
             // Blank lines, `#time=` metadata and `;` comments are skipped.
         }
-        if let Some(text) = current.take() {
-            settings.push(text);
+        if !current.is_empty() {
+            settings.push(&current);
         }
         Some(settings)
     }
 
-    fn push(&mut self, text: String) {
-        let name = value_name(&text);
-        let data = text[text.find('=').map_or(text.len(), |i| i + 1)..].trim_start();
-        // `str(2):` is Wine-only syntax; Unity does not write such values.
-        if SKIPPED_PREFIXES.iter().any(|p| name.starts_with(p)) || data.starts_with("str(") {
-            self.skipped += 1;
-            return;
+    fn push(&mut self, lines: &[&str]) {
+        match parse_value(lines) {
+            Some(v) if !SKIPPED_PREFIXES.iter().any(|p| v.name.starts_with(p)) => self.values.push(v),
+            // Unity's bookkeeping, Wine-only `str(N):` values, broken lines.
+            _ => self.skipped += 1,
         }
-        self.values.push(Value { name, text });
     }
 
-    /// The settings as a registry-editor file that `reg import` understands.
+    /// The settings as a registry-editor file that `reg import` understands,
+    /// written from the parsed values.
     pub fn to_reg_file(&self) -> String {
         let mut out = format!("REGEDIT4\n\n[HKEY_CURRENT_USER\\{KEY}]\n");
         for v in &self.values {
-            out.push_str(&v.text);
+            out.push_str(&v.to_reg_line());
             out.push('\n');
         }
         out.push('\n');
@@ -155,32 +164,127 @@ fn section_key(line: &str) -> Option<String> {
         raw.to_string()
     };
     for root in ["HKEY_CURRENT_USER\\", "HKCU\\"] {
-        if key.len() >= root.len() && key[..root.len()].eq_ignore_ascii_case(root) {
+        if key.get(..root.len()).is_some_and(|start| start.eq_ignore_ascii_case(root)) {
             return Some(key[root.len()..].to_string());
         }
     }
     Some(key)
 }
 
-/// Decodes the quoted name at the start of a value line (`@` = default value).
-fn value_name(text: &str) -> String {
-    let mut chars = text.chars();
-    if chars.next() != Some('"') {
-        return String::new();
+/// Reads one value from its lines (`"name"=data`, hex data may continue on
+/// further lines). `None` for anything that is not a well-formed value of a
+/// known kind, including control characters anywhere and continuation lines
+/// that are not hex data.
+fn parse_value(lines: &[&str]) -> Option<Value> {
+    let first = lines.first()?;
+    if lines.iter().any(|l| l.chars().any(char::is_control)) {
+        return None;
     }
-    let mut name = String::new();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => {
-                if let Some(next) = chars.next() {
-                    name.push(next);
-                }
+    let (name, rest) = if let Some(rest) = first.strip_prefix('@') {
+        (String::new(), rest)
+    } else {
+        quoted(first)?
+    };
+    let data = rest.trim_start().strip_prefix('=')?.trim_start();
+    let data = if data.starts_with('"') {
+        let (text, after) = quoted(data)?;
+        if !after.trim().is_empty() || lines.len() > 1 {
+            return None;
+        }
+        Data::String(text)
+    } else if let Some(hex) = data.strip_prefix("dword:") {
+        if lines.len() > 1 || hex.is_empty() || hex.len() > 8 {
+            return None;
+        }
+        Data::Dword(hex_number(hex.trim_end())?)
+    } else {
+        let rest = data.strip_prefix("hex")?;
+        let (kind, rest) = match rest.strip_prefix('(') {
+            Some(inner) => {
+                let (n, after) = inner.split_once(')')?;
+                (Some(hex_number(n)?), after)
             }
-            '"' => break,
-            c => name.push(c),
+            None => (None, rest),
+        };
+        let mut digits = rest.strip_prefix(':')?.to_string();
+        for line in &lines[1..] {
+            digits = digits.strip_suffix('\\')?.to_string();
+            digits.push_str(line.trim_start());
+        }
+        let digits = digits.trim_end().trim_end_matches(',');
+        let bytes = if digits.is_empty() {
+            Vec::new()
+        } else {
+            digits
+                .split(',')
+                .map(|b| if b.len() == 2 { hex_number(b).map(|n| n as u8) } else { None })
+                .collect::<Option<Vec<u8>>>()?
+        };
+        Data::Hex { kind, bytes }
+    };
+    Some(Value { name, data })
+}
+
+/// A number written only in hex digits (no sign, no prefix), up to 32 bits.
+fn hex_number(digits: &str) -> Option<u32> {
+    let plain = !digits.is_empty() && digits.len() <= 8 && digits.bytes().all(|c| c.is_ascii_hexdigit());
+    plain.then(|| u32::from_str_radix(digits, 16).ok()).flatten()
+}
+
+/// Reads a quoted string with `\\` and `\"` escapes from the start of `text`;
+/// returns it and what follows the closing quote.
+fn quoted(text: &str) -> Option<(String, &str)> {
+    let mut chars = text.strip_prefix('"')?.char_indices();
+    let mut out = String::new();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => match chars.next()? {
+                (_, c @ ('\\' | '"')) => out.push(c),
+                _ => return None,
+            },
+            '"' => return Some((out, &text[i + 2..])),
+            c => out.push(c),
         }
     }
-    name
+    None
+}
+
+/// `"…"` with the escapes registry files use.
+fn quote(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+impl Value {
+    /// The value in registry-file syntax, long hex data wrapped like regedit
+    /// does it.
+    fn to_reg_line(&self) -> String {
+        let name = if self.name.is_empty() { "@".to_string() } else { quote(&self.name) };
+        let data = match &self.data {
+            Data::String(text) => quote(text),
+            Data::Dword(n) => format!("dword:{n:08x}"),
+            Data::Hex { kind, bytes } => {
+                let mut out = match kind {
+                    Some(k) => format!("hex({k:x}):"),
+                    None => "hex:".to_string(),
+                };
+                let mut width = name.len() + 1 + out.len();
+                for (i, b) in bytes.iter().enumerate() {
+                    if width > 76 {
+                        out.push_str("\\\n  ");
+                        width = 2;
+                    }
+                    out.push_str(&format!("{b:02x}"));
+                    width += 2;
+                    if i + 1 < bytes.len() {
+                        out.push(',');
+                        width += 1;
+                    }
+                }
+                out
+            }
+        };
+        format!("{name}={data}")
+    }
 }
 
 /// What an import did.
@@ -217,10 +321,17 @@ pub fn import(
         log,
     };
 
+    // Nothing is deleted below unless the current settings are safe first.
     let backup = backup_dir.join(format!("settings-{stamp}.reg"));
     let backup = if Settings::read(prefix)?.is_some_and(|s| !s.values.is_empty()) {
-        wine_cmd.run(&["reg", "export", &hkcu_key, &to_wine_path(&backup), "/y"])?;
-        backup.is_file().then_some(backup)
+        let exported = wine_cmd.run(&["reg", "export", &hkcu_key, &to_wine_path(&backup), "/y"])?;
+        if !exported || !backup.is_file() {
+            return Err(Error::Config(format!(
+                "Wine could not back up the current settings, so nothing was changed (log: {})",
+                log.display()
+            )));
+        }
+        Some(backup)
     } else {
         None
     };
@@ -348,7 +459,10 @@ mod tests {
         );
         assert_eq!(s.skipped, 2);
         assert!(s.has_key_bindings());
-        assert!(s.values[1].text.ends_with("\n  74,69,6f,6e,22,00"));
+        let Data::Hex { kind: None, bytes } = &s.values[1].data else { panic!() };
+        assert_eq!(bytes.last(), Some(&0));
+        assert_eq!(bytes.len(), 23);
+        assert_eq!(s.values[0].data, Data::Dword(0));
     }
 
     #[test]
@@ -375,7 +489,48 @@ mod tests {
         }
         let s = Settings::parse(&decode(&bytes)).unwrap();
         assert_eq!(s.values.len(), 2);
-        assert_eq!(s.values[1].text, "\"selected_theme_h1228781698\"=hex:44,65,66,61,75,6c,74,00");
+        assert_eq!(s.values[1].data, Data::Hex { kind: None, bytes: b"Default\0".to_vec() });
+        assert_eq!(s.values[1].to_reg_line(), "\"selected_theme_h1228781698\"=hex:44,65,66,61,75,6c,74,00");
+    }
+
+    #[test]
+    fn nothing_but_values_of_the_key_reaches_the_import() {
+        // A continuation that is not hex data, a header smuggled in as one,
+        // a carriage return inside a line and an unknown kind.
+        let text = "[Software\\\\Cikoria\\\\Runehaven] 1\n\
+\"a\"=dword:00000001\\\n\
+[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run]\n\
+\"b\"=hex:01,\\\n\
+[HKEY_LOCAL_MACHINE\\Software]\n\
+\"c\"=\"x\ry\"\n\
+\"d\"=qword:01\n\
+\"e\"=\"fine \\\"quoted\\\" \\\\ text\"\n\
+\"f\"=hex:02,\\\n\
+  03\n";
+        let s = Settings::parse(text).unwrap();
+        let names: Vec<&str> = s.values.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["e", "f"]);
+        assert_eq!(s.skipped, 4);
+        assert_eq!(s.values[0].data, Data::String("fine \"quoted\" \\ text".into()));
+        let out = s.to_reg_file();
+        assert_eq!(out.matches('[').count(), 1, "only our own key: {out}");
+        assert_eq!(Settings::parse(&out).unwrap().values, s.values);
+    }
+
+    #[test]
+    fn long_binary_values_are_wrapped_and_read_back() {
+        let v = Value { name: "rebinds_h1".into(), data: Data::Hex { kind: Some(3), bytes: (0..=255).collect() } };
+        let s = Settings { values: vec![v], skipped: 0 };
+        let out = s.to_reg_file();
+        assert!(out.lines().all(|l| l.len() <= 80));
+        assert_eq!(Settings::parse(&out).unwrap().values, s.values);
+    }
+
+    #[test]
+    fn odd_section_names_do_not_crash() {
+        // The root's length ends inside the Ü.
+        assert_eq!(section_key("[HKEY_CURRENT_USERÜ]").as_deref(), Some("HKEY_CURRENT_USERÜ"));
+        assert_eq!(section_key("[HKCUÜ]").as_deref(), Some("HKCUÜ"));
     }
 
     #[test]
@@ -385,6 +540,8 @@ mod tests {
 
     #[test]
     fn escaped_names() {
-        assert_eq!(value_name(r#""a\"b\\c"=dword:1"#), r#"a"b\c"#);
+        let v = parse_value(&[r#""a\"b\\c"=dword:1"#]).unwrap();
+        assert_eq!(v.name, r#"a"b\c"#);
+        assert_eq!(v.to_reg_line(), r#""a\"b\\c"=dword:00000001"#);
     }
 }

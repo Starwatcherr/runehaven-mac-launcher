@@ -68,7 +68,8 @@
     $("m-verify").disabled = busy || !status.game.installed;
     $("m-uninstall").disabled = busy || !status.game.installed;
     $("m-reinstall").disabled = busy || status.runtime.detail.startsWith("Custom");
-    $("m-reset").disabled = busy || !status.prefix.installed || !status.runtime.installed;
+    // Only the launcher's own Wine setup is ever reset.
+    $("m-reset").disabled = busy || !status.own_prefix || !status.prefix.installed || !status.runtime.installed;
     $("m-remove").disabled = busy || status.data_bytes === 0;
     $("m-uninstall-launcher").disabled = busy;
     if (window.rml.busy() && !jobRunning) sayM("Close Runehaven or wait for the installation to finish first.");
@@ -84,10 +85,17 @@
   }
 
   function startJob(text) {
-    jobRunning = true;
+    setJob(true);
     sayM(text);
     renderMaintenance();
   }
+
+  // Home's buttons wait while a job runs (app.js).
+  function setJob(on) {
+    jobRunning = on;
+    window.rml.render();
+  }
+  window.rml.jobBusy = () => jobRunning;
 
   $("m-update").addEventListener("click", () => { show("home"); window.rml.install(); });
 
@@ -171,7 +179,8 @@
 
   $("un-ok").addEventListener("click", () => {
     const on = name => choice(name).getAttribute("aria-checked") === "true";
-    unRunning = jobRunning = true;
+    unRunning = true;
+    setJob(true);
     $("un-ok").disabled = $("un-cancel").disabled = true;
     unNote.textContent = "Starting…";
     invoke("uninstall_launcher", { choice: { runtime: on("runtime"), prefix: on("prefix"), logs: on("logs") }, game: on("game") });
@@ -184,7 +193,8 @@
       setTimeout(() => invoke("quit_and_trash"), 3000);
       return;
     }
-    unRunning = jobRunning = false;
+    unRunning = false;
+    setJob(false);
     unNote.textContent = e.message;
     unNote.style.color = "var(--red)";
     $("un-ok").disabled = $("un-cancel").disabled = false;
@@ -257,6 +267,7 @@
     if (!await ask("Move Runehaven?", "Steam moves the game into the chosen library and checks the files afterwards.", "Move")) return;
     sayLoc("Starting Steam…");
     $("loc-move").disabled = true;
+    setJob(true);
     invoke("move_game", { library: Number(libSelect.value) });
   });
 
@@ -283,6 +294,7 @@
   function moveProgress(e) {
     if (e.kind === "working") { sayLoc(e.detail); return; }
     $("loc-move").disabled = false;
+    setJob(false);
     if (e.kind === "done") sayLoc(e.detail); else sayLoc(e.message, true);
     loadLocations();
   }
@@ -290,8 +302,9 @@
   window.__TAURI__.event.listen("maintenance", ({ payload: e }) => {
     if (e.job === "uninstall-launcher") { uninstallProgress(e); return; }
     if (e.job === "move") { moveProgress(e); return; }
+    if (e.job === "restore") { if (e.kind !== "working") loadMaintenance(); return; }
     if (e.kind === "working") { sayM(e.detail); return; }
-    jobRunning = false;
+    setJob(false);
     if (e.kind === "done") sayM(e.detail);
     else sayM(e.message, true);
     loadMaintenance();

@@ -12,6 +12,11 @@ SOURCES="src/macfix.m"
 FRAMEWORKS="-framework Foundation -framework ColorSync"
 DEFINES=""
 if [ "${RML_DEV:-0}" = "1" ]; then
+    case "$OUT" in
+        build/app/*)
+            echo "error: the app's helper (build/app) is never built with the test control" >&2
+            exit 1 ;;
+    esac
     SOURCES="$SOURCES src/testcontrol.m"
     FRAMEWORKS="$FRAMEWORKS -framework CoreGraphics -framework ImageIO"
     DEFINES="-DRML_TEST_CONTROL"

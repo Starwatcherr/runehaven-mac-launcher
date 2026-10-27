@@ -7,7 +7,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use rml_core::config::Config;
-use rml_core::launch::{self, prefix_path};
+use rml_core::launch::prefix_path;
+use rml_core::lock::JobLock;
 use rml_core::paths::{LauncherPaths, SteamPaths};
 use rml_core::prefix;
 use rml_core::runtime::{self, runtime_dir};
@@ -98,7 +99,7 @@ fn locations() -> rml_core::Result<Locations> {
 pub fn set_install_location(kind: String, mode: String, value: Option<String>) -> Result<String, String> {
     let run = || -> rml_core::Result<String> {
         let (launcher, mut config) = load()?;
-        let _lock = launch::RunLock::acquire(&launcher)?;
+        let _lock = JobLock::acquire(&launcher)?;
         let path = value.as_deref().map(PathBuf::from);
         let need_path = || path.clone().ok_or_else(|| Error::Config("no folder was chosen".into()));
         let note = match (kind.as_str(), mode.as_str()) {
@@ -203,9 +204,10 @@ pub fn move_game(app: AppHandle, library: u32) {
             working("Waiting for Steam. Log in if it asks you to.")
         })?;
         let launcher = LauncherPaths::detect()?;
+        let lock = JobLock::acquire(&launcher)?;
         let opts = InstallOptions { cancel: Arc::new(AtomicBool::new(false)), ..Default::default() };
         working("Steam is moving Runehaven…");
-        steam::move_game(&client, &launcher, &opts, library, &mut |_| {})?;
+        steam::move_game(&client, &launcher, &lock, &opts, library, &mut |_| {})?;
         let (_, mut config) = load()?;
         config.steam_library = Some(library);
         config.save(&launcher.config_file())?;

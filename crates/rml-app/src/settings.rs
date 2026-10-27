@@ -86,15 +86,16 @@ pub fn open_logs() -> Result<(), String> {
 }
 
 /// Packs the logs for a bug report onto the desktop and shows the file in
-/// Finder. Returns its path.
+/// Finder. Returns its path. Unity's memory dumps only go in with
+/// `crash_dumps`.
 #[tauri::command]
-pub async fn export_logs() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+pub async fn export_logs(crash_dumps: Option<bool>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
         let launcher = LauncherPaths::detect().map_err(|e| e.to_string())?;
         let desktop = std::env::var_os("HOME")
             .map(|h| PathBuf::from(h).join("Desktop"))
             .ok_or("HOME is not set")?;
-        let zip = doctor::export_logs(&launcher, &desktop).map_err(|e| e.to_string())?;
+        let zip = doctor::export_logs(&launcher, &desktop, crash_dumps.unwrap_or(false)).map_err(|e| e.to_string())?;
         let _ = std::process::Command::new("/usr/bin/open").arg("-R").arg(&zip).status();
         Ok(zip.display().to_string())
     })

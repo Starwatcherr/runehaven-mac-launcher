@@ -134,6 +134,22 @@ impl AppManifest {
         Self::parse(&text)
     }
 
+    /// The game's folder in `lib`. Steam names it with a single folder name;
+    /// anything else (empty, a path, `..`) is refused rather than followed.
+    pub fn game_dir(&self, lib: &Library) -> Result<PathBuf> {
+        let name = Path::new(&self.installdir);
+        let mut parts = name.components();
+        match (parts.next(), parts.next()) {
+            (Some(std::path::Component::Normal(_)), None) if !self.installdir.contains('/') => {
+                Ok(lib.steamapps().join("common").join(name))
+            }
+            _ => Err(Error::Parse {
+                what: format!("Steam's manifest for app {}", self.appid),
+                detail: format!("unusable game folder name {:?}", self.installdir),
+            }),
+        }
+    }
+
     fn has(&self, flag: u64) -> bool {
         self.state_flags & flag != 0
     }
@@ -334,6 +350,17 @@ mod tests {
         assert!(m.is_ready());
         assert!(!m.update_pending());
         assert_eq!(m.depots[0].manifest, "7388440364521527929");
+    }
+
+    #[test]
+    fn game_folder_must_be_one_plain_name() {
+        let lib = Library { index: 0, path: "/steam".into() };
+        let mut m = AppManifest::parse(RUNEHAVEN_MANIFEST).unwrap();
+        assert_eq!(m.game_dir(&lib).unwrap(), Path::new("/steam/steamapps/common/Runehaven"));
+        for bad in ["", ".", "..", "../Other", "/Users/x", "a/b", "Runehaven/"] {
+            m.installdir = bad.into();
+            assert!(m.game_dir(&lib).is_err(), "{bad:?} is refused");
+        }
     }
 
     #[test]

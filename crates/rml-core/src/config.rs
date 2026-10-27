@@ -10,6 +10,9 @@ use crate::error::{Error, IoContext, Result};
 /// Turns on Apple's Metal performance HUD.
 const HUD_VAR: &str = "MTL_HUD_ENABLED";
 
+/// Window widths and heights the settings accept, in points.
+const SIZE_RANGE: std::ops::RangeInclusive<u32> = 320..=8192;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct Config {
@@ -117,9 +120,15 @@ impl Config {
             "fullscreen" => self.display.fullscreen = flag(value)?,
             "retina" => self.display.retina = flag(value)?,
             "size" => {
-                let (w, h) = value.split_once('x').ok_or_else(|| bad("WIDTHxHEIGHT"))?;
-                self.display.width = w.parse().map_err(|_| bad("WIDTHxHEIGHT"))?;
-                self.display.height = h.parse().map_err(|_| bad("WIDTHxHEIGHT"))?;
+                let size = || -> Option<(u32, u32)> {
+                    let (w, h) = value.split_once('x')?;
+                    let (w, h) = (w.parse().ok()?, h.parse().ok()?);
+                    (SIZE_RANGE.contains(&w) && SIZE_RANGE.contains(&h)).then_some((w, h))
+                };
+                let (w, h) = size().ok_or_else(|| {
+                    bad(&format!("WIDTHxHEIGHT, each from {} to {}", SIZE_RANGE.start(), SIZE_RANGE.end()))
+                })?;
+                (self.display.width, self.display.height) = (w, h);
             }
             _ => return Err(Error::Config(format!("unknown setting `{key}`"))),
         }
@@ -164,6 +173,8 @@ mod tests {
         c.set("prefix", "default").unwrap();
         assert!(!c.hud() && c.prefix.is_none());
         assert!(c.set("retina", "maybe").is_err());
+        assert!(c.set("size", "99999999x720").is_err());
+        assert!(c.set("size", "0x0").is_err());
         assert!(c.set("colour", "red").is_err());
     }
 }

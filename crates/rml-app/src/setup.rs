@@ -1,10 +1,12 @@
 //! "Install requirements": does what the requirements list is missing, one
 //! after the other, and reports each step as a `setup` event.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rml_core::config::Config;
+use rml_core::lock::JobLock;
 use rml_core::paths::LauncherPaths;
 use rml_core::runtime::{self, RuntimeEvent, RuntimeSpec};
 use rml_core::steam::{self, InstallEvent, InstallOptions, ReadyStatus, SteamClient};
@@ -63,7 +65,22 @@ pub fn install_requirements(app: AppHandle, state: State<'_, SetupState>) -> Res
         let emit = |event: SetupEvent| {
             let _ = app.emit("setup", event);
         };
-        let outcome = run(&cancel, &emit);
+        // Lets the next run start even if this one panics.
+        struct Clear(AppHandle);
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                if let Ok(mut slot) = self.0.state::<SetupState>().cancel.lock() {
+                    *slot = None;
+                }
+            }
+        }
+        let _clear = Clear(app.clone());
+        let outcome = catch_unwind(AssertUnwindSafe(|| run(&cancel, &emit))).unwrap_or_else(|_| {
+            Err(Stop {
+                id: "rosetta",
+                error: Error::Config("The launcher ran into an internal error. Please export the logs and report it.".into()),
+            })
+        });
         let cancelled = match outcome {
             Ok(()) => false,
             Err(Stop { error: Error::Interrupted | Error::Cancelled, .. }) => true,
@@ -73,7 +90,6 @@ pub fn install_requirements(app: AppHandle, state: State<'_, SetupState>) -> Res
             }
         };
         emit(SetupEvent::Finished { cancelled });
-        *app.state::<SetupState>().cancel.lock().unwrap() = None;
     });
     Ok(())
 }
@@ -99,6 +115,7 @@ pub fn open_steam_download() -> Result<(), String> {
 fn run(cancel: &Arc<AtomicBool>, emit: &dyn Fn(SetupEvent)) -> Result<(), Stop> {
     let at = |id: &'static str| move |error: Error| Stop { id, error };
     let launcher = LauncherPaths::detect().map_err(at("rosetta"))?;
+    let lock = JobLock::acquire(&launcher).map_err(at("rosetta"))?;
     let missing = |reqs: &[Requirement], id: &str| reqs.iter().any(|r| r.id == id && r.state != "ok");
     let reqs = check_all(&launcher);
     let working = |id: &'static str, detail: &str, progress: Option<f64>| {
@@ -138,7 +155,7 @@ fn run(cancel: &Arc<AtomicBool>, emit: &dyn Fn(SetupEvent)) -> Result<(), Stop> 
             library_index: Config::load(&launcher.config_file()).map_err(at(id))?.steam_library,
             ..Default::default()
         };
-        steam::install(&client, &launcher, &opts, &mut |event| match event {
+        steam::install(&client, &launcher, &lock, &opts, &mut |event| match event {
             InstallEvent::CheckingOwnership => working(id, "Checking your Steam library…", None),
             InstallEvent::SwitchingPlatform => {
                 working(id, "Switching Steam to the Windows version…", None)

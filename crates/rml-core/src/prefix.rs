@@ -2,13 +2,16 @@
 //! and save games.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+
+use sha2::{Digest, Sha256};
 
 use crate::error::{Error, IoContext, Result};
-use crate::util::utc_stamp;
+use crate::util::{free_path, utc_stamp};
 
 /// Where Unity keeps Runehaven's data inside the user's AppData.
 const SAVE_SUBDIR: &str = "AppData/LocalLow/Cikoria/Runehaven";
@@ -111,6 +114,63 @@ pub fn saves_dir(prefix: &Path) -> Option<PathBuf> {
         .or_else(|| candidates.into_iter().next())
 }
 
+/// Every Windows user's Runehaven data folder in a prefix that exists, with
+/// the user's name. Usually there is one; a prefix used with different Wine
+/// builds can have a second.
+pub fn saves_sources(prefix: &Path) -> Vec<(String, PathBuf)> {
+    let mut found: Vec<(String, PathBuf)> = fs::read_dir(prefix.join("drive_c/users"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name() != "Public")
+        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path().join(SAVE_SUBDIR)))
+        .filter(|(_, dir)| dir.is_dir())
+        .collect();
+    found.sort();
+    found
+}
+
+/// Packs save game folders into `zip`. A single folder is packed as it is
+/// (`Runehaven/…`, the way Unity keeps it); several go into one folder each,
+/// named by their label. The ZIP only gets its name once it is complete.
+/// Returns `false` when there was nothing to pack.
+pub fn pack_saves(sources: &[(String, PathBuf)], zip: &Path) -> Result<bool> {
+    match sources {
+        [] => Ok(false),
+        [(_, only)] => ditto_zip(only, zip).map(|()| true),
+        many => {
+            let staging = std::env::temp_dir()
+                .join(format!("rml-saves-{}-{}", std::process::id(), utc_stamp()))
+                .join("Runehaven saves");
+            let packed = many
+                .iter()
+                .try_for_each(|(label, dir)| copy_dir(dir, &staging.join(label).join("Runehaven")))
+                .and_then(|()| ditto_zip(&staging, zip));
+            if let Some(parent) = staging.parent() {
+                let _ = fs::remove_dir_all(parent);
+            }
+            packed.map(|()| true)
+        }
+    }
+}
+
+/// Zips `src` (the folder itself, not just its contents) into `zip`.
+fn ditto_zip(src: &Path, zip: &Path) -> Result<()> {
+    let part = zip.with_extension("zip.part");
+    let _ = fs::remove_file(&part);
+    let status = Command::new("/usr/bin/ditto")
+        .args(["-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent"])
+        .arg(src)
+        .arg(&part)
+        .status()
+        .ctx(|| "running ditto".into())?;
+    if !status.success() {
+        let _ = fs::remove_file(&part);
+        return Err(Error::Config("could not pack the save games".into()));
+    }
+    fs::rename(&part, zip).ctx(|| format!("moving {} into place", zip.display()))
+}
+
 /// Copies save games from another prefix (e.g. an earlier manual setup).
 /// An existing folder in the target is kept as a dated backup.
 pub fn import_saves(from_prefix: &Path, to_prefix: &Path) -> Result<PathBuf> {
@@ -211,44 +271,137 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// How many save game backups are kept.
+/// The newest save game backups that are all kept.
 pub const SAVE_BACKUPS: usize = 10;
+/// Older backups: the last one of each day is kept for this many days with
+/// backups, so a run of bad starts cannot push out every good state.
+pub const DAILY_SAVE_BACKUPS: usize = 14;
 
-/// Packs the save games of `prefix` into `backups/saves-<time>.zip` and
-/// deletes all but the newest `keep`. Returns the new backup, or `None`
-/// when there are no save games yet.
-pub fn backup_saves(prefix: &Path, backups: &Path, keep: usize) -> Result<Option<PathBuf>> {
-    let Some(saves) = saves_dir(prefix).filter(|d| d.is_dir()) else {
+/// Packs the save games of `prefix` into `backups/saves-<time>-<fingerprint>.zip`
+/// if they changed since the last backup, then thins out old backups (see
+/// [`SAVE_BACKUPS`]). Returns the new backup; `None` when there are no save
+/// games or they are unchanged.
+pub fn backup_saves(prefix: &Path, backups: &Path) -> Result<Option<PathBuf>> {
+    let sources = saves_sources(prefix);
+    if sources.is_empty() {
         return Ok(None);
-    };
+    }
     fs::create_dir_all(backups).ctx(|| format!("creating {}", backups.display()))?;
-    let zip = crate::util::free_path(backups, &format!("saves-{}", utc_stamp()), "zip");
-    let status = Command::new("/usr/bin/ditto")
-        .args(["-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent"])
-        .arg(&saves)
-        .arg(&zip)
-        .status()
-        .ctx(|| "running ditto".into())?;
-    if !status.success() {
-        return Err(Error::Config("could not pack the save games".into()));
+    let fingerprint = saves_fingerprint(&sources)?;
+    let existing = list_backups(backups);
+    let made = if existing.first().is_some_and(|b| b.fingerprint() == Some(fingerprint.as_str())) {
+        None
+    } else {
+        let zip = free_path(backups, &format!("saves-{}-{fingerprint}", utc_stamp()), "zip");
+        pack_saves(&sources, &zip)?;
+        Some(zip)
+    };
+    prune_backups(backups, SAVE_BACKUPS, DAILY_SAVE_BACKUPS);
+    Ok(made)
+}
+
+/// One file in the backup folder.
+struct Backup {
+    path: PathBuf,
+    /// `YYYYMMDDTHHMMSSZ` from the name; empty if the name has none.
+    stamp: String,
+    modified: SystemTime,
+}
+
+impl Backup {
+    fn name(&self) -> &str {
+        self.path.file_name().and_then(|n| n.to_str()).unwrap_or_default()
     }
-    let mut all: Vec<PathBuf> = fs::read_dir(backups)
-        .ctx(|| format!("reading {}", backups.display()))?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("saves-") && n.ends_with(".zip"))
-        })
-        .collect();
-    // The time stamp in the name sorts oldest first.
-    all.sort();
-    let excess = all.len().saturating_sub(keep);
-    for old in &all[..excess] {
-        let _ = fs::remove_file(old);
+
+    /// The fingerprint in the name, for backups that have one.
+    fn fingerprint(&self) -> Option<&str> {
+        let rest = self.name().strip_prefix("saves-")?.strip_suffix(".zip")?;
+        let (_, fingerprint) = rest.split_once('-')?;
+        Some(fingerprint)
     }
-    Ok(Some(zip))
+}
+
+/// The save game backups in `dir`, newest first. Unfinished ones (`.part`
+/// files left by a crash) are deleted.
+fn list_backups(dir: &Path) -> Vec<Backup> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("saves-") {
+            continue;
+        }
+        if name.ends_with(".part") {
+            let _ = fs::remove_file(&path);
+            continue;
+        }
+        if !name.ends_with(".zip") || !entry.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        let stamp = name
+            .get(6..22)
+            .filter(|s| s.len() == 16 && s.as_bytes()[8] == b'T' && s.ends_with('Z'))
+            .unwrap_or_default()
+            .to_string();
+        let modified = entry.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+        found.push(Backup { path, stamp, modified });
+    }
+    found.sort_by(|a, b| (&b.stamp, b.modified).cmp(&(&a.stamp, a.modified)));
+    found
+}
+
+/// Keeps the newest `recent` backups, and of the older ones the newest of
+/// each day for `daily` days; deletes the rest.
+fn prune_backups(dir: &Path, recent: usize, daily: usize) {
+    let mut days_kept: Vec<String> = Vec::new();
+    for backup in list_backups(dir).into_iter().skip(recent) {
+        let day = backup.stamp.get(..8).unwrap_or_default().to_string();
+        if !day.is_empty() && !days_kept.contains(&day) && days_kept.len() < daily {
+            days_kept.push(day);
+        } else {
+            let _ = fs::remove_file(&backup.path);
+        }
+    }
+}
+
+/// A short fingerprint of the save games' file names and contents.
+fn saves_fingerprint(sources: &[(String, PathBuf)]) -> Result<String> {
+    let mut hasher = Sha256::new();
+    for (label, dir) in sources {
+        hasher.update(label.as_bytes());
+        hasher.update([0]);
+        hash_tree(dir, Path::new(""), &mut hasher)?;
+    }
+    Ok(hasher.finalize()[..6].iter().map(|b| format!("{b:02x}")).collect())
+}
+
+fn hash_tree(dir: &Path, rel: &Path, hasher: &mut Sha256) -> Result<()> {
+    let mut entries: Vec<fs::DirEntry> = fs::read_dir(dir)
+        .ctx(|| format!("reading {}", dir.display()))?
+        .collect::<std::io::Result<_>>()
+        .ctx(|| format!("reading {}", dir.display()))?;
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let path = rel.join(entry.file_name());
+        let kind = entry.file_type().ctx(|| "reading file type".into())?;
+        hasher.update(if kind.is_dir() { b"d" } else { b"f" });
+        hasher.update(path.to_string_lossy().as_bytes());
+        hasher.update([0]);
+        if kind.is_dir() {
+            hash_tree(&entry.path(), &path, hasher)?;
+        } else if kind.is_file() {
+            let mut file = fs::File::open(entry.path()).ctx(|| format!("reading {}", path.display()))?;
+            let mut buf = [0u8; 1 << 16];
+            loop {
+                let n = file.read(&mut buf).ctx(|| format!("reading {}", path.display()))?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Whether `path` is a Wine prefix (for example a Whisky or CrossOver bottle).
@@ -350,20 +503,78 @@ mod tests {
         assert_eq!(new_prefix_in(tmp.path()), tmp.path().join("Runehaven Wine"));
     }
 
+    fn zip_listing(zip: &Path) -> String {
+        let out = Command::new("/usr/bin/unzip").arg("-l").arg(zip).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
     #[test]
-    fn save_backups_keep_only_the_newest() {
+    fn save_backups_only_when_something_changed() {
         let tmp = tempfile::tempdir().unwrap();
         let prefix = tmp.path().join("prefix");
         let backups = tmp.path().join("backups");
-        assert!(backup_saves(&prefix, &backups, 2).unwrap().is_none(), "no saves yet");
+        assert!(backup_saves(&prefix, &backups).unwrap().is_none(), "no saves yet");
         fs::create_dir_all(prefix.join("drive_c/users/crossover")).unwrap();
         let saves = saves_dir(&prefix).unwrap();
         fs::create_dir_all(&saves).unwrap();
         fs::write(saves.join("saves.dat"), "progress").unwrap();
-        for _ in 0..3 {
-            assert!(backup_saves(&prefix, &backups, 2).unwrap().unwrap().exists());
+        let first = backup_saves(&prefix, &backups).unwrap().unwrap();
+        assert!(zip_listing(&first).contains("Runehaven/saves.dat"));
+        assert!(backup_saves(&prefix, &backups).unwrap().is_none(), "unchanged");
+        fs::write(saves.join("saves.dat"), "more progress").unwrap();
+        assert!(backup_saves(&prefix, &backups).unwrap().is_some());
+        assert_eq!(fs::read_dir(&backups).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn old_backups_thin_out_to_one_a_day() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // Three a day for five days, written in order.
+        let mut names = Vec::new();
+        for day in 1..=5 {
+            for hour in [8, 12, 20] {
+                names.push(format!("saves-202610{day:02}T{hour:02}0000Z-abc.zip"));
+            }
         }
-        let left = fs::read_dir(&backups).unwrap().count();
-        assert_eq!(left, 2);
+        // A copy with the Finder-style suffix belongs to its own time stamp.
+        names.push("saves-20261005T200000Z-abc (2).zip".into());
+        names.push("saves-20261005T200000Z-abc.zip.part".into());
+        for n in &names {
+            fs::write(dir.join(n), "").unwrap();
+        }
+        prune_backups(dir, 4, 2);
+        let mut left: Vec<String> =
+            fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                // the last of days 3 and 4, then the four newest
+                "saves-20261003T200000Z-abc.zip",
+                "saves-20261004T200000Z-abc.zip",
+                "saves-20261005T080000Z-abc.zip",
+                "saves-20261005T120000Z-abc.zip",
+                "saves-20261005T200000Z-abc (2).zip",
+                "saves-20261005T200000Z-abc.zip",
+            ]
+        );
+    }
+
+    #[test]
+    fn saves_of_every_windows_user_are_packed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let prefix = fake_prefix(&tmp.path().join("p"), "crossover", Some("a"));
+        let second = prefix.join(format!("drive_c/users/kian/{SAVE_SUBDIR}"));
+        fs::create_dir_all(&second).unwrap();
+        fs::write(second.join("saves.dat"), "b").unwrap();
+        let sources = saves_sources(&prefix);
+        assert_eq!(sources.len(), 2);
+        let zip = tmp.path().join("all.zip");
+        assert!(pack_saves(&sources, &zip).unwrap());
+        let list = zip_listing(&zip);
+        assert!(list.contains("Runehaven saves/crossover/Runehaven/saves.dat"));
+        assert!(list.contains("Runehaven saves/kian/Runehaven/saves.dat"));
+        assert!(!tmp.path().join("all.zip.part").exists());
     }
 }

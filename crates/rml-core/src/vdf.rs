@@ -51,9 +51,13 @@ pub fn parse(text: &str) -> Result<Value> {
         chars: text.char_indices().peekable(),
         src: text,
     };
-    let items = parse_items(&mut lexer, false)?;
+    let items = parse_items(&mut lexer, 0)?;
     Ok(Value::Obj(items))
 }
+
+/// Steam's files nest a few levels; anything deeper is not one of them, and
+/// stopping early keeps a damaged file from exhausting the stack.
+const MAX_DEPTH: usize = 64;
 
 #[derive(Debug, PartialEq)]
 enum Token {
@@ -149,7 +153,12 @@ impl Lexer<'_> {
     }
 }
 
-fn parse_items(lexer: &mut Lexer, nested: bool) -> Result<Vec<(String, Value)>> {
+/// The items of one block; `depth` 0 is the document itself.
+fn parse_items(lexer: &mut Lexer, depth: usize) -> Result<Vec<(String, Value)>> {
+    if depth > MAX_DEPTH {
+        return Err(lexer.err("blocks nested too deeply"));
+    }
+    let nested = depth > 0;
     let mut items = Vec::new();
     loop {
         let key = match lexer.next()? {
@@ -162,7 +171,7 @@ fn parse_items(lexer: &mut Lexer, nested: bool) -> Result<Vec<(String, Value)>> 
         };
         let value = match lexer.next()? {
             Some(Token::Str(v)) => Value::Str(v),
-            Some(Token::Open) => Value::Obj(parse_items(lexer, true)?),
+            Some(Token::Open) => Value::Obj(parse_items(lexer, depth + 1)?),
             Some(Token::Close) | None => {
                 return Err(lexer.err(&format!("key `{key}` has no value")))
             }
@@ -223,5 +232,13 @@ mod tests {
         assert!(parse("\"a\" { \"b\" \"c\"").is_err());
         assert!(parse("\"a\"").is_err());
         assert!(parse("\"a\" \"unterminated").is_err());
+    }
+
+    #[test]
+    fn deep_nesting_is_an_error_not_a_crash() {
+        let deep = "\"a\" {".repeat(100_000) + &"}".repeat(100_000);
+        assert!(parse(&deep).is_err());
+        let fine = "\"a\" {".repeat(MAX_DEPTH) + &"}".repeat(MAX_DEPTH);
+        assert!(parse(&fine).is_ok());
     }
 }

@@ -1,6 +1,10 @@
 # A tag like v0.1.0-beta.1 builds the release from this repository's source:
 # the input fix on Linux, the Mac helper and the app on macOS. The result is a
 # draft release with the DMG, both helpers and their SHA-256 checksums.
+#
+# Every action is pinned to a full commit (Dependabot proposes updates), the
+# build jobs may only read the repository, and only the last job, which runs
+# no build tools, may write the release.
 name: Release
 
 on:
@@ -8,18 +12,20 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   input-fix:
     name: Input fix (Windows DLL)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install the MinGW-w64 cross compiler
         run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
       - run: inputfix/build.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: version.dll
           path: inputfix/build/version.dll
@@ -29,7 +35,9 @@ jobs:
     needs: input-fix
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Check that the tag matches the app version
         run: |
           version=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' crates/rml-app/tauri.conf.json)
@@ -37,28 +45,47 @@ jobs:
             echo "tag $GITHUB_REF_NAME does not match the app version $version" >&2
             exit 1
           fi
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: version.dll
           path: inputfix/build
-      - name: Build the Mac helper
-        run: OUT=build/app/rml-macfix.dylib macfix/build.sh
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Build the Mac helper (without the development test control)
+        run: RML_DEV=0 OUT=build/app/rml-macfix.dylib macfix/build.sh
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10
+        with:
+          toolchain: 1.99.0
+      # No build cache here: a release is built from scratch.
       - name: Install the Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
-      - run: cargo test --workspace
+        run: cargo install tauri-cli --version =2.12.4 --locked
+      - run: cargo test --workspace --locked
       - name: Build the app and the DMG
         working-directory: crates/rml-app
-        run: cargo tauri build --bundles app,dmg
+        run: cargo tauri build --bundles app,dmg -- --locked
       - name: Collect the files and their checksums
         run: |
           mkdir dist
           cp target/release/bundle/dmg/*.dmg dist/
           cp inputfix/build/version.dll macfix/build/app/rml-macfix.dylib dist/
           cd dist && shasum -a 256 * > SHA256SUMS.txt && cat SHA256SUMS.txt
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: dist/
+
+  publish:
+    name: Draft release
+    needs: app
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: dist/*
+          fail_on_unmatched_files: true

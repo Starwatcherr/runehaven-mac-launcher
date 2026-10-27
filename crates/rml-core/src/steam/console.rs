@@ -183,12 +183,12 @@ impl AppStatus {
             let l = line.trim();
             if let Some(rest) = l.strip_prefix("AppID ") {
                 seen = true;
-                if let (Some(a), Some(b)) = (rest.find('('), rest.rfind(')')) {
-                    status.name = Some(rest[a + 1..b].to_string());
+                if let Some(name) = between_parens(rest) {
+                    status.name = Some(name.to_string());
                 }
             } else if let Some(rest) = l.strip_prefix("- release state:") {
-                if let (Some(a), Some(b)) = (rest.find('('), rest.rfind(')')) {
-                    status.release_flags = rest[a + 1..b]
+                if let Some(flags) = between_parens(rest) {
+                    status.release_flags = flags
                         .split(',')
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
@@ -210,6 +210,13 @@ impl AppStatus {
         }
         seen.then_some(status)
     }
+}
+
+/// The text between the first `(` and the last `)`, if they are in that order.
+fn between_parens(text: &str) -> Option<&str> {
+    let start = text.find('(')? + 1;
+    let end = text.rfind(')')?;
+    text.get(start..end)
 }
 
 #[cfg(test)]
@@ -306,6 +313,13 @@ mod tests {
         assert_eq!(s.build_id, Some(23702508));
         assert!(s.install_dir.unwrap().ends_with("common/Runehaven"));
         assert!(AppStatus::parse(&lines("unrelated")).is_none());
+    }
+
+    #[test]
+    fn stray_parentheses_do_not_crash() {
+        let s = AppStatus::parse(&lines("AppID 2676030 ) odd (\n - release state: ) x (")).unwrap();
+        assert_eq!(s.name, None);
+        assert!(s.release_flags.is_empty());
     }
 
     /// Verbatim from Steam's console_log on macOS (16.10.2026), timestamps

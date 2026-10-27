@@ -73,6 +73,9 @@ pub enum Error {
     #[error("Runehaven is already running.")]
     AlreadyRunning,
 
+    #[error("The launcher is busy with another task. Wait until it has finished, then try again.")]
+    Busy,
+
     #[error("Could not parse {what}: {detail}")]
     Parse { what: String, detail: String },
 

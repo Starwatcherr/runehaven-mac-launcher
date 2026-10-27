@@ -1,12 +1,14 @@
 //! The maintenance page: what is installed where, and the jobs that repair
 //! or remove it. Longer jobs report as `maintenance` events.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use rml_core::config::Config;
 use rml_core::launch::{self, prefix_path};
+use rml_core::lock::JobLock;
 use rml_core::maintain::{self, disk_usage, UninstallChoice};
 use rml_core::paths::LauncherPaths;
 use rml_core::runtime::{Runtime, RuntimeSpec};
@@ -104,6 +106,7 @@ enum JobEvent {
 }
 
 /// Runs a job off the interface thread and reports its outcome as events.
+/// A job that panics still reports, as failed, so the page never waits forever.
 pub fn spawn_job(
     app: AppHandle,
     job: &'static str,
@@ -114,10 +117,47 @@ pub fn spawn_job(
             let _ = app.emit("maintenance", event);
         };
         let working = |detail: &str| emit(JobEvent::Working { job, detail: detail.into() });
-        match run(&working) {
-            Ok(detail) => emit(JobEvent::Done { job, detail }),
-            Err(e) => emit(JobEvent::Failed { job, message: e.to_string() }),
+        match catch_unwind(AssertUnwindSafe(|| run(&working))) {
+            Ok(Ok(detail)) => emit(JobEvent::Done { job, detail }),
+            Ok(Err(e)) => emit(JobEvent::Failed { job, message: e.to_string() }),
+            Err(_) => emit(JobEvent::Failed { job, message: "The launcher ran into an internal error. Please export the logs and report it.".into() }),
         }
+    });
+}
+
+/// Only one restore job at a time.
+static RESTORING: AtomicBool = AtomicBool::new(false);
+
+/// After a crash in the middle of a Steam job, Steam may still be set to
+/// the Windows platform, so other Mac games would get Windows versions.
+/// When that is noted in the state, this switches Steam back in the
+/// background (starting Steam if needed) as the job `restore`. It also runs
+/// while the game does; a Steam job that is running restores it itself.
+pub fn restore_steam_platform(app: AppHandle) {
+    let Ok(launcher) = LauncherPaths::detect() else { return };
+    let pending = LauncherState::load(&launcher.state_file()).is_ok_and(|s| s.pending_platform_restore.is_some());
+    if !pending || RESTORING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    spawn_job(app, "restore", move |working| {
+        let result = (|| {
+            working("Steam is still set to the Windows version after an interrupted task. Switching it back…");
+            let client = SteamClient::detect()?;
+            client.wait_ready_until(&AtomicBool::new(false), &mut |_| {
+                working("Waiting for Steam to switch it back to the Mac version. Log in if it asks you to.")
+            })?;
+            let lock = match JobLock::acquire_beside_game(&launcher) {
+                Ok(lock) => lock,
+                Err(Error::Busy) => return Ok(String::new()),
+                Err(e) => return Err(e),
+            };
+            Ok(match steam::recover_platform(&client, &launcher, &lock)? {
+                Some(_) => "Steam is set back to the Mac version.".into(),
+                None => String::new(),
+            })
+        })();
+        RESTORING.store(false, Ordering::SeqCst);
+        result
     });
 }
 
@@ -131,8 +171,9 @@ pub fn verify_game(app: AppHandle) {
             working("Waiting for Steam. Log in if it asks you to.")
         })?;
         let launcher = LauncherPaths::detect()?;
+        let lock = JobLock::acquire(&launcher)?;
         let opts = InstallOptions { cancel: Arc::new(AtomicBool::new(false)), ..Default::default() };
-        let seen = steam::verify(&client, &launcher, &opts, &mut |e| match e {
+        let seen = steam::verify(&client, &launcher, &lock, &opts, &mut |e| match e {
             InstallEvent::SwitchingPlatform | InstallEvent::Requested => {
                 working("Asking Steam to check the files…")
             }
@@ -159,9 +200,10 @@ pub fn uninstall_game(app: AppHandle) {
             working("Waiting for Steam. Log in if it asks you to.")
         })?;
         let launcher = LauncherPaths::detect()?;
+        let lock = JobLock::acquire(&launcher)?;
         let opts = InstallOptions { cancel: Arc::new(AtomicBool::new(false)), ..Default::default() };
         working("Uninstalling through Steam…");
-        steam::uninstall(&client, &launcher, &opts, &mut |_| {})?;
+        steam::uninstall(&client, &launcher, &lock, &opts, &mut |_| {})?;
         Ok("Runehaven was uninstalled. Your save games are still in the Wine setup.".into())
     });
 }
@@ -172,7 +214,8 @@ pub async fn remove_runtime() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
         let launcher = LauncherPaths::detect().map_err(|e| e.to_string())?;
         let config = Config::load(&launcher.config_file()).map_err(|e| e.to_string())?;
-        maintain::remove_runtime(&config, &launcher).map_err(|e| e.to_string())
+        let lock = JobLock::acquire(&launcher).map_err(|e| e.to_string())?;
+        maintain::remove_runtime(&config, &launcher, &lock).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -185,7 +228,8 @@ pub fn reset_prefix(app: AppHandle) {
         working("Setting up Wine again, about a minute…");
         let launcher = LauncherPaths::detect()?;
         let config = Config::load(&launcher.config_file())?;
-        maintain::reset_prefix(&config, &launcher, &mut |_| {})?;
+        let lock = JobLock::acquire(&launcher)?;
+        maintain::reset_prefix(&config, &launcher, &lock, &mut |_| {})?;
         Ok("Wine was set up again; save games and settings were kept.".into())
     });
 }
@@ -197,10 +241,11 @@ pub fn remove_data(app: AppHandle) {
         working("Removing…");
         let launcher = LauncherPaths::detect()?;
         let config = Config::load(&launcher.config_file())?;
+        let lock = JobLock::acquire(&launcher)?;
         let desktop = std::env::var_os("HOME")
             .map(|h| PathBuf::from(h).join("Desktop"))
             .ok_or_else(|| Error::Config("HOME is not set".into()))?;
-        Ok(match maintain::remove_data(&config, &launcher, &desktop)? {
+        Ok(match maintain::remove_data(&config, &launcher, &lock, &desktop)? {
             Some(zip) => format!(
                 "Removed. Your save games are on the desktop: {}",
                 zip.file_name().unwrap_or_default().to_string_lossy()
@@ -216,7 +261,10 @@ pub fn remove_data(app: AppHandle) {
 pub fn uninstall_launcher(app: AppHandle, choice: UninstallChoice, game: bool) {
     spawn_job(app, "uninstall-launcher", move |working| {
         let launcher = LauncherPaths::detect()?;
-        let config = Config::load(&launcher.config_file()).unwrap_or_default();
+        // A settings file that cannot be read stops here: it says which
+        // Wine setup is the launcher's own and may be deleted.
+        let config = Config::load(&launcher.config_file())?;
+        let lock = JobLock::acquire(&launcher)?;
         let pending = LauncherState::load(&launcher.state_file())?.pending_platform_restore.is_some();
         if game || pending {
             working("Starting Steam…");
@@ -225,12 +273,12 @@ pub fn uninstall_launcher(app: AppHandle, choice: UninstallChoice, game: bool) {
                 working("Waiting for Steam. Log in if it asks you to.")
             })?;
             if pending {
-                steam::recover_platform(&client, &launcher)?;
+                steam::recover_platform(&client, &launcher, &lock)?;
             }
             if game {
                 working("Uninstalling Runehaven through Steam…");
                 let opts = InstallOptions { cancel: Arc::new(AtomicBool::new(false)), ..Default::default() };
-                match steam::uninstall(&client, &launcher, &opts, &mut |_| {}) {
+                match steam::uninstall(&client, &launcher, &lock, &opts, &mut |_| {}) {
                     Ok(()) | Err(Error::GameNotInstalled) => {}
                     Err(e) => return Err(e),
                 }
@@ -240,7 +288,7 @@ pub fn uninstall_launcher(app: AppHandle, choice: UninstallChoice, game: bool) {
         let desktop = std::env::var_os("HOME")
             .map(|h| PathBuf::from(h).join("Desktop"))
             .ok_or_else(|| Error::Config("HOME is not set".into()))?;
-        Ok(match maintain::uninstall_launcher(&config, &launcher, choice, &desktop)? {
+        Ok(match maintain::uninstall_launcher(&config, &launcher, &lock, choice, &desktop)? {
             Some(zip) => format!(
                 "Uninstalled. Your save games are on the desktop: {}",
                 zip.file_name().unwrap_or_default().to_string_lossy()
@@ -250,9 +298,6 @@ pub fn uninstall_launcher(app: AppHandle, choice: UninstallChoice, game: bool) {
     });
 }
 
-/// Quits the app and moves it to the Trash once it has quit. If moving is
-/// not possible, Finder shows the app so it can be dragged there. In a
-/// development build (not an `.app`) it only quits.
 /// Shows the save games (`saves`) or their backups (`backups`) in Finder.
 #[tauri::command]
 pub fn open_saves(what: String) -> Result<(), String> {
@@ -275,6 +320,9 @@ pub fn open_saves(what: String) -> Result<(), String> {
     std::process::Command::new("/usr/bin/open").arg(&dir).status().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Quits the app and moves it to the Trash once it has quit. If moving is
+/// not possible, Finder shows the app so it can be dragged there. In a
+/// development build (not an `.app`) it only quits.
 #[tauri::command]
 pub fn quit_and_trash(app: AppHandle) {
     let bundle = std::env::current_exe()

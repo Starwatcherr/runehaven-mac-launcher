@@ -9,6 +9,7 @@ pub mod config;
 pub mod doctor;
 pub mod error;
 pub mod launch;
+pub mod lock;
 pub mod maintain;
 pub mod paths;
 pub mod prefix;

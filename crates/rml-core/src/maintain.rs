@@ -1,6 +1,6 @@
 //! Maintenance: sizes for the overview, reinstalling the runtime, setting the
-//! Wine prefix up again and removing the launcher's data. Nothing here runs
-//! while the game is running.
+//! Wine prefix up again and removing the launcher's data. Each job needs the
+//! [`JobLock`], so nothing here runs while the game or another job is running.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,8 @@ use serde::Deserialize;
 
 use crate::config::Config;
 use crate::error::{Error, IoContext, Result};
-use crate::launch::{self, prefix_path, ResolvedRuntime, RunLock, StartEvent};
+use crate::launch::{self, prefix_path, ResolvedRuntime, StartEvent};
+use crate::lock::{JobLock, LOCK_FILE, PID_FILE};
 use crate::state::LauncherState;
 use crate::paths::LauncherPaths;
 use crate::prefix;
@@ -54,8 +55,7 @@ pub fn import_settings(
 }
 
 /// Deletes the launcher's own Wine runtime so it can be downloaded again.
-pub fn remove_runtime(config: &Config, launcher: &LauncherPaths) -> Result<()> {
-    let _lock = RunLock::acquire(launcher)?;
+pub fn remove_runtime(config: &Config, launcher: &LauncherPaths, _lock: &JobLock) -> Result<()> {
     let rt = Runtime::locate(config, launcher, &RuntimeSpec::bundled());
     if rt.root.exists() {
         fs::remove_dir_all(&rt.root).ctx(|| format!("removing {}", rt.root.display()))?;
@@ -63,34 +63,51 @@ pub fn remove_runtime(config: &Config, launcher: &LauncherPaths) -> Result<()> {
     Ok(())
 }
 
-/// Sets the Wine prefix up from scratch and keeps save games and settings:
-/// the old prefix moves to `backups/`, a fresh one is created, and saves and
-/// settings are copied over. Returns where the old prefix went.
+/// Sets the launcher's own Wine prefix up from scratch and keeps save games
+/// and settings: the old prefix moves to `backups/`, a fresh one is created,
+/// and saves and settings are copied over. If that fails, the old prefix is
+/// put back. A prefix chosen in the settings (another app's, say) is never
+/// touched. Returns where the old prefix went.
 pub fn reset_prefix(
     config: &Config,
     launcher: &LauncherPaths,
+    _lock: &JobLock,
     on_event: &mut dyn FnMut(StartEvent),
 ) -> Result<Option<PathBuf>> {
-    let _lock = RunLock::acquire(launcher)?;
-    let prefix = prefix_path(config, launcher);
-    let backup = if prefix.exists() {
-        let backups = launcher.root.join("backups");
-        fs::create_dir_all(&backups).ctx(|| format!("creating {}", backups.display()))?;
-        let to = backups.join(format!("prefix-{}", utc_stamp()));
-        // A plain rename; a prefix on another drive fails here and stays untouched.
-        fs::rename(&prefix, &to).ctx(|| format!("moving {} aside", prefix.display()))?;
-        Some(to)
-    } else {
-        None
-    };
-    launch::ensure_prefix(config, launcher, on_event)?;
-    if let Some(old) = &backup {
-        if prefix::saves_dir(old).is_some_and(|d| d.is_dir()) {
-            prefix::import_saves(old, &prefix)?;
-        }
-        import_settings(old, config, launcher, &prefix)?;
+    if config.prefix.is_some() {
+        return Err(Error::Config(
+            "Only the launcher's own Wine setup can be reset. The one chosen in the settings is left as it is.".into(),
+        ));
     }
-    Ok(backup)
+    let prefix = launcher.prefix();
+    if !prefix.exists() {
+        launch::ensure_prefix(config, launcher, on_event)?;
+        return Ok(None);
+    }
+    let backups = launcher.root.join("backups");
+    fs::create_dir_all(&backups).ctx(|| format!("creating {}", backups.display()))?;
+    let old = backups.join(format!("prefix-{}", utc_stamp()));
+    fs::rename(&prefix, &old).ctx(|| format!("moving {} aside", prefix.display()))?;
+    let rebuilt = (|| -> Result<()> {
+        launch::ensure_prefix(config, launcher, on_event)?;
+        if prefix::saves_dir(&old).is_some_and(|d| d.is_dir()) {
+            prefix::import_saves(&old, &prefix)?;
+        }
+        if old.join("user.reg").is_file() {
+            import_settings(&old, config, launcher, &prefix)?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = rebuilt {
+        let put_back = (!prefix.exists() || fs::remove_dir_all(&prefix).is_ok())
+            && fs::rename(&old, &prefix).is_ok();
+        return Err(if put_back {
+            e
+        } else {
+            Error::Config(format!("{e} The previous Wine setup is in {}.", old.display()))
+        });
+    }
+    Ok(Some(old))
 }
 
 /// Deletes the runtime, the launcher's own prefix, downloads and logs. Save
@@ -100,11 +117,11 @@ pub fn reset_prefix(
 pub fn remove_data(
     config: &Config,
     launcher: &LauncherPaths,
+    _lock: &JobLock,
     saves_dest: &Path,
 ) -> Result<Option<PathBuf>> {
-    let _lock = RunLock::acquire(launcher)?;
     let own_prefix = config.prefix.is_none();
-    let zip = if own_prefix { pack_saves(config, launcher, saves_dest)? } else { None };
+    let zip = if own_prefix { pack_saves(config, launcher, saves_dest, false)? } else { None };
     let mut doomed = vec![
         Runtime::locate(config, launcher, &RuntimeSpec::bundled()).root,
         launcher.runtime(),
@@ -120,23 +137,60 @@ pub fn remove_data(
     Ok(zip)
 }
 
-/// Packs the save games of the prefix into a ZIP in `dest`, if there are any.
-fn pack_saves(config: &Config, launcher: &LauncherPaths, dest: &Path) -> Result<Option<PathBuf>> {
-    let Some(dir) = prefix::saves_dir(&prefix_path(config, launcher)).filter(|d| d.is_dir()) else {
-        return Ok(None);
+/// Packs the save games of the prefix into a ZIP in `dest`, if there are
+/// any. With `older`, also those of the prefixes earlier resets kept in
+/// `backups/`.
+fn pack_saves(
+    config: &Config,
+    launcher: &LauncherPaths,
+    dest: &Path,
+    older: bool,
+) -> Result<Option<PathBuf>> {
+    let current = prefix::saves_sources(&prefix_path(config, launcher));
+    let mut earlier = Vec::new();
+    if older {
+        for (stamp, dir) in old_prefixes(launcher) {
+            earlier.extend(
+                prefix::saves_sources(&dir)
+                    .into_iter()
+                    .map(|(user, saves)| (format!("Wine setup before reset {stamp}/{user}"), saves)),
+            );
+        }
+    }
+    let sources: Vec<(String, PathBuf)> = if earlier.is_empty() {
+        current
+    } else {
+        current
+            .into_iter()
+            .map(|(user, saves)| (format!("Current Wine setup/{user}"), saves))
+            .chain(earlier)
+            .collect()
     };
+    if sources.is_empty() {
+        return Ok(None);
+    }
     fs::create_dir_all(dest).ctx(|| format!("creating {}", dest.display()))?;
     let zip = free_path(dest, &format!("Runehaven saves {}", utc_stamp()), "zip");
-    let status = Command::new("/usr/bin/ditto")
-        .args(["-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent"])
-        .arg(&dir)
-        .arg(&zip)
-        .status()
-        .ctx(|| "running ditto".into())?;
-    if !status.success() {
-        return Err(Error::Config("could not pack the save games; nothing was deleted".into()));
+    match prefix::pack_saves(&sources, &zip) {
+        Ok(_) => Ok(Some(zip)),
+        Err(_) => Err(Error::Config("could not pack the save games; nothing was deleted".into())),
     }
-    Ok(Some(zip))
+}
+
+/// The prefixes earlier resets moved into `backups/`, with their time stamps.
+fn old_prefixes(launcher: &LauncherPaths) -> Vec<(String, PathBuf)> {
+    let mut found: Vec<(String, PathBuf)> = fs::read_dir(launcher.root.join("backups"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| {
+            let stamp = e.file_name().to_str()?.strip_prefix("prefix-")?.to_string();
+            Some((stamp, e.path()))
+        })
+        .collect();
+    found.sort();
+    found
 }
 
 /// What goes away together with the launcher. Its settings always do.
@@ -152,14 +206,17 @@ pub struct UninstallChoice {
 
 /// Removes what the launcher put onto the Mac, as chosen, plus its settings
 /// and its input fix in the game folder. Returns the ZIP with the save games
-/// when the prefix was removed. The app itself is not touched here.
+/// (also those of earlier setups in `backups/`) when the prefix was removed.
+/// `config` must be the real settings, not a default for a file that could
+/// not be read: it decides which prefix is the launcher's own. The app
+/// itself is not touched here.
 pub fn uninstall_launcher(
     config: &Config,
     launcher: &LauncherPaths,
+    _lock: &JobLock,
     choice: UninstallChoice,
     saves_dest: &Path,
 ) -> Result<Option<PathBuf>> {
-    let _lock = RunLock::acquire(launcher)?;
     if LauncherState::load(&launcher.state_file())?.pending_platform_restore.is_some() {
         return Err(Error::Config(
             "Steam's platform setting still has to be switched back first. Start Steam and try again.".into(),
@@ -169,7 +226,7 @@ pub fn uninstall_launcher(
     let mut zip = None;
     let mut doomed = Vec::new();
     if choice.prefix && config.prefix.is_none() {
-        zip = pack_saves(config, launcher, saves_dest)?;
+        zip = pack_saves(config, launcher, saves_dest, true)?;
         doomed.extend([launcher.prefix(), launcher.root.join("backups")]);
     }
     if choice.runtime {
@@ -186,7 +243,13 @@ pub fn uninstall_launcher(
     for dir in doomed.into_iter().filter(|d| d.exists()) {
         fs::remove_dir_all(&dir).ctx(|| format!("removing {}", dir.display()))?;
     }
-    for file in [launcher.config_file(), launcher.state_file(), launcher.root.join("run.pid")] {
+    for file in [
+        launcher.config_file(),
+        launcher.state_file(),
+        LauncherState::lock_file(&launcher.state_file()),
+        launcher.root.join(PID_FILE),
+        launcher.root.join(LOCK_FILE),
+    ] {
         let _ = fs::remove_file(file);
     }
     // Gone completely if nothing was kept.
@@ -195,8 +258,9 @@ pub fn uninstall_launcher(
     Ok(zip)
 }
 
-/// Deletes the input fix from the game folder, but only if it is exactly the
-/// launcher's: a mod with the same file name stays.
+/// Deletes the input fix from the game folder, but only if it is the
+/// launcher's (this one or an older build): a mod with the same file name
+/// stays.
 fn remove_own_inputfix(config: &Config) {
     let ours = config
         .inputfix_dll
@@ -207,7 +271,8 @@ fn remove_own_inputfix(config: &Config) {
         return;
     };
     let target = game_dir.join("version.dll");
-    if ours.is_some() && fs::read(&target).ok() == ours {
+    let is_file = fs::symlink_metadata(&target).is_ok_and(|m| m.is_file());
+    if is_file && fs::read(&target).is_ok_and(|found| launch::is_own_inputfix(&found, ours.as_deref())) {
         let _ = fs::remove_file(target);
     }
 }
@@ -215,6 +280,61 @@ fn remove_own_inputfix(config: &Config) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lock(launcher: &LauncherPaths) -> JobLock {
+        JobLock::acquire(launcher).unwrap()
+    }
+
+    fn save_in(prefix: &Path, user: &str, content: &str) {
+        fs::create_dir_all(prefix.join(format!("drive_c/users/{user}"))).unwrap();
+        let saves = prefix::saves_dir(prefix).unwrap();
+        fs::create_dir_all(&saves).unwrap();
+        fs::write(saves.join("saves.dat"), content).unwrap();
+    }
+
+    #[test]
+    fn a_chosen_prefix_is_never_reset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let launcher = LauncherPaths::at(tmp.path().join("launcher"));
+        let other = tmp.path().join("other-app-bottle");
+        save_in(&other, "crossover", "theirs");
+        let config = Config { prefix: Some(other.clone()), ..Config::default() };
+        assert!(reset_prefix(&config, &launcher, &lock(&launcher), &mut |_| {}).is_err());
+        assert!(prefix::saves_dir(&other).unwrap().join("saves.dat").exists());
+        assert!(!launcher.root.join("backups").exists());
+    }
+
+    #[test]
+    fn a_failed_reset_puts_the_old_prefix_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let launcher = LauncherPaths::at(tmp.path().join("launcher"));
+        save_in(&launcher.prefix(), "crossover", "progress");
+        fs::write(launcher.prefix().join("system.reg"), "").unwrap();
+        // No Wine runtime: setting the prefix up again fails.
+        assert!(reset_prefix(&Config::default(), &launcher, &lock(&launcher), &mut |_| {}).is_err());
+        let saves = prefix::saves_dir(&launcher.prefix()).unwrap();
+        assert_eq!(fs::read_to_string(saves.join("saves.dat")).unwrap(), "progress");
+        let left = fs::read_dir(launcher.root.join("backups")).unwrap().count();
+        assert_eq!(left, 0, "nothing stays behind in backups");
+    }
+
+    #[test]
+    fn uninstalling_packs_the_saves_of_earlier_setups_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let launcher = LauncherPaths::at(tmp.path().join("launcher"));
+        save_in(&launcher.prefix(), "crossover", "now");
+        save_in(&launcher.root.join("backups/prefix-20261001T100000Z"), "crossover", "before");
+        let choice = UninstallChoice { runtime: false, prefix: true, logs: false };
+        let desktop = tmp.path().join("desktop");
+        let zip = uninstall_launcher(&Config::default(), &launcher, &lock(&launcher), choice, &desktop)
+            .unwrap()
+            .unwrap();
+        let list = Command::new("/usr/bin/unzip").arg("-l").arg(&zip).output().unwrap();
+        let list = String::from_utf8_lossy(&list.stdout);
+        assert!(list.contains("Current Wine setup/crossover/Runehaven/saves.dat"));
+        assert!(list.contains("Wine setup before reset 20261001T100000Z/crossover/Runehaven/saves.dat"));
+        assert!(!launcher.root.join("backups").exists());
+    }
 
     #[test]
     fn removing_data_packs_saves_and_spares_the_rest() {
@@ -229,7 +349,7 @@ mod tests {
         fs::write(launcher.config_file(), "{}").unwrap();
 
         let dest = tmp.path().join("desktop");
-        let zip = remove_data(&Config::default(), &launcher, &dest).unwrap().unwrap();
+        let zip = remove_data(&Config::default(), &launcher, &lock(&launcher), &dest).unwrap().unwrap();
         let list = Command::new("/usr/bin/unzip").arg("-l").arg(&zip).output().unwrap();
         assert!(String::from_utf8_lossy(&list.stdout).contains("saves.dat"));
         assert!(!launcher.prefix().exists() && !launcher.runtime().exists() && !launcher.logs().exists());
@@ -246,7 +366,7 @@ mod tests {
             prefix: Some(other.clone()),
             ..Config::default()
         };
-        let zip = remove_data(&config, &launcher, &tmp.path().join("desktop")).unwrap();
+        let zip = remove_data(&config, &launcher, &lock(&launcher), &tmp.path().join("desktop")).unwrap();
         assert!(zip.is_none());
         assert!(other.exists());
     }
@@ -266,14 +386,14 @@ mod tests {
 
         // Keep the runtime: settings go, the runtime stays.
         let keep_runtime = UninstallChoice { runtime: false, prefix: true, logs: true };
-        let zip = uninstall_launcher(&Config::default(), &launcher, keep_runtime, &desktop).unwrap();
+        let zip = uninstall_launcher(&Config::default(), &launcher, &lock(&launcher), keep_runtime, &desktop).unwrap();
         assert!(zip.is_some_and(|z| z.exists()));
         assert!(!launcher.prefix().exists() && !launcher.logs().exists() && !launcher.config_file().exists());
         assert!(launcher.runtime().exists());
 
         // Everything: the folder is gone.
         let all = UninstallChoice { runtime: true, prefix: true, logs: true };
-        uninstall_launcher(&Config::default(), &launcher, all, &desktop).unwrap();
+        uninstall_launcher(&Config::default(), &launcher, &lock(&launcher), all, &desktop).unwrap();
         assert!(!launcher.root.exists());
     }
 
@@ -287,7 +407,7 @@ mod tests {
         };
         state.save(&launcher.state_file()).unwrap();
         let all = UninstallChoice { runtime: true, prefix: true, logs: true };
-        assert!(uninstall_launcher(&Config::default(), &launcher, all, tmp.path()).is_err());
+        assert!(uninstall_launcher(&Config::default(), &launcher, &lock(&launcher), all, tmp.path()).is_err());
         assert!(launcher.state_file().exists());
     }
 }

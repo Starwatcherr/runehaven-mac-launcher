@@ -6,11 +6,13 @@
 //! archive from its original release page, checks it against the SHA-256 in
 //! `runtime.json` and assembles the runtime locally.
 
-use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -187,6 +189,12 @@ pub fn install(
     }
     let downloads = launcher.root.join("downloads");
     fs::create_dir_all(&downloads).ctx(|| format!("creating {}", downloads.display()))?;
+    // Unfinished downloads of an earlier run that crashed.
+    for entry in fs::read_dir(&downloads).into_iter().flatten().flatten() {
+        if entry.file_name().to_string_lossy().ends_with(".part") {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 
     let mut archives = Vec::new();
     for c in &spec.components {
@@ -254,11 +262,11 @@ pub fn install(
 
 fn assemble(c: &Component, archive: &Path, staging: &Path) -> Result<()> {
     match c.extract {
-        Extract::All => untar(archive, staging, &c.members),
+        Extract::All => untar(archive, &c.sha256, staging, &c.members),
         Extract::Map => {
             let tmp = staging.join(format!(".tmp-{}", c.archive_name()));
             fs::create_dir_all(&tmp).ctx(|| format!("creating {}", tmp.display()))?;
-            untar(archive, &tmp, &c.members)?;
+            untar(archive, &c.sha256, &tmp, &c.members)?;
             for (from, to) in c.mappings() {
                 let src = tmp.join(&from);
                 let dst = staging.join(&to);
@@ -274,13 +282,22 @@ fn assemble(c: &Component, archive: &Path, staging: &Path) -> Result<()> {
 }
 
 /// Unpacks with the system `tar`, which handles .tar.xz and .tar.gz on macOS.
-fn untar(archive: &Path, into: &Path, members: &[String]) -> Result<()> {
-    let out = Command::new("tar")
-        .arg("-xf")
-        .arg(archive)
-        .arg("-C")
+/// The archive is opened once, checked against `sha256`, and that same open
+/// file is what `tar` reads, so a file swapped in between is never unpacked.
+fn untar(archive: &Path, sha256: &str, into: &Path, members: &[String]) -> Result<()> {
+    let mut file = File::open(archive).ctx(|| format!("opening {}", archive.display()))?;
+    if sha256_reader(&mut file).ctx(|| format!("reading {}", archive.display()))? != sha256 {
+        return Err(Error::Config(format!(
+            "{} changed after it was downloaded; delete it and try again",
+            archive.display()
+        )));
+    }
+    file.seek(SeekFrom::Start(0)).ctx(|| format!("reading {}", archive.display()))?;
+    let out = Command::new("/usr/bin/tar")
+        .args(["-x", "-f", "-", "-C"])
         .arg(into)
         .args(members)
+        .stdin(file)
         .output()
         .ctx(|| "running tar".into())?;
     if !out.status.success() {
@@ -306,12 +323,14 @@ fn hex(bytes: &[u8]) -> String {
 
 pub fn sha256_file(path: &Path) -> Result<String> {
     let mut file = File::open(path).ctx(|| format!("opening {}", path.display()))?;
+    sha256_reader(&mut file).ctx(|| format!("reading {}", path.display()))
+}
+
+fn sha256_reader(reader: &mut impl Read) -> std::io::Result<String> {
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 1 << 20];
     loop {
-        let n = file
-            .read(&mut buf)
-            .ctx(|| format!("reading {}", path.display()))?;
+        let n = reader.read(&mut buf)?;
         if n == 0 {
             break;
         }
@@ -339,8 +358,13 @@ pub(crate) fn http_agent() -> ureq::Agent {
         .into()
 }
 
+/// How long a download may go without receiving anything before it counts
+/// as stalled.
+const DOWNLOAD_STALL: Duration = Duration::from_secs(60);
+
 /// Downloads `url` to `dest` while hashing; the file only appears under its
-/// final name if size and checksum match. Setting `cancel` stops it.
+/// final name if size and checksum match. It stops as soon as more than
+/// `size` bytes arrive, nothing arrives for a minute, or `cancel` is set.
 pub fn download_verified(
     url: &str,
     sha256: &str,
@@ -349,46 +373,95 @@ pub fn download_verified(
     cancel: &AtomicBool,
     on_progress: &mut dyn FnMut(u64, u64),
 ) -> Result<()> {
-    let part = dest.with_extension("part");
+    let file_name = dest.file_name().unwrap_or_default().to_string_lossy();
+    let part = dest.with_file_name(format!("{file_name}.{}.part", std::process::id()));
     let response = http_agent()
         .get(url)
+        .config()
+        .timeout_connect(Some(Duration::from_secs(30)))
+        .timeout_recv_response(Some(Duration::from_secs(60)))
+        // Only so that a reader left behind below ends some time.
+        .timeout_recv_body(Some(Duration::from_secs(4 * 3600)))
+        .build()
         .call()
         .map_err(|e| Error::Config(format!("download of {url} failed: {e}")))?;
     let mut reader = response.into_body().into_reader();
-    let mut file = File::create(&part).ctx(|| format!("creating {}", part.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1 << 16];
-    let mut done = 0u64;
-    let mut last_report = 0u64;
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            drop(file);
-            let _ = fs::remove_file(&part);
-            return Err(Error::Interrupted);
-        }
-        let n = reader.read(&mut buf).ctx(|| format!("downloading {url}"))?;
-        if n == 0 {
+    // Reading happens on its own thread, so that cancelling or a stalled
+    // connection ends the wait at once instead of when a read returns.
+    let (tx, rx) = mpsc::sync_channel::<std::io::Result<Vec<u8>>>(16);
+    std::thread::spawn(move || loop {
+        let mut buf = vec![0u8; 1 << 16];
+        let read = reader.read(&mut buf).map(|n| {
+            buf.truncate(n);
+            buf
+        });
+        let more = matches!(&read, Ok(chunk) if !chunk.is_empty());
+        if tx.send(read).is_err() || !more {
             break;
         }
-        hasher.update(&buf[..n]);
-        file.write_all(&buf[..n])
-            .ctx(|| format!("writing {}", part.display()))?;
-        done += n as u64;
-        if done - last_report >= 1 << 20 || done == size {
-            on_progress(done, size);
-            last_report = done;
+    });
+
+    let _ = fs::remove_file(&part);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&part)
+        .ctx(|| format!("creating {}", part.display()))?;
+    let mut receive = || -> Result<()> {
+        let mut hasher = Sha256::new();
+        let (mut done, mut last_report, mut last_data) = (0u64, 0u64, Instant::now());
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(Error::Interrupted);
+            }
+            let chunk = match rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(read) => read.ctx(|| format!("downloading {url}"))?,
+                Err(RecvTimeoutError::Timeout) if last_data.elapsed() < DOWNLOAD_STALL => continue,
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(Error::Config(format!(
+                        "the download of {url} stalled (nothing arrived for {} seconds)",
+                        DOWNLOAD_STALL.as_secs()
+                    )))
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(Error::Config(format!("the download of {url} broke off")))
+                }
+            };
+            if chunk.is_empty() {
+                break;
+            }
+            last_data = Instant::now();
+            done += chunk.len() as u64;
+            if done > size {
+                return Err(Error::Config(format!(
+                    "download of {url} is larger than the expected {size} bytes"
+                )));
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk).ctx(|| format!("writing {}", part.display()))?;
+            if done - last_report >= 1 << 20 || done == size {
+                on_progress(done, size);
+                last_report = done;
+            }
+        }
+        file.flush().ctx(|| format!("writing {}", part.display()))?;
+        let actual = hex(&hasher.finalize());
+        if done != size || actual != sha256 {
+            return Err(Error::Config(format!(
+                "download of {url} is not the expected file (got {done} bytes, SHA-256 {actual})"
+            )));
+        }
+        Ok(())
+    };
+    let received = receive();
+    drop(file);
+    match received {
+        Ok(()) => fs::rename(&part, dest).ctx(|| format!("moving {}", dest.display())),
+        Err(e) => {
+            let _ = fs::remove_file(&part);
+            Err(e)
         }
     }
-    file.flush().ctx(|| format!("writing {}", part.display()))?;
-    drop(file);
-    let actual = hex(&hasher.finalize());
-    if done != size || actual != sha256 {
-        let _ = fs::remove_file(&part);
-        return Err(Error::Config(format!(
-            "download of {url} is not the expected file (got {done} bytes, SHA-256 {actual})"
-        )));
-    }
-    fs::rename(&part, dest).ctx(|| format!("moving {}", dest.display()))
 }
 
 /// Finds the `wine` program in what the user picked: the program itself, a

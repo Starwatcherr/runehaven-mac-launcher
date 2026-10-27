@@ -13,16 +13,16 @@ const RELEASES_API: &str = "https://api.github.com/repos/Starwatcherr/runehaven-
 /// The page players download new versions from.
 pub const RELEASES_PAGE: &str = "https://github.com/Starwatcherr/runehaven-mac-launcher/releases";
 
+/// A newer release. Only its version is passed on; the page players get it
+/// from is always [`RELEASES_PAGE`], never an address from the answer.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct NewVersion {
     pub version: String,
-    pub url: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct Release {
     tag_name: String,
-    html_url: String,
     #[serde(default)]
     draft: bool,
 }
@@ -50,10 +50,10 @@ fn newest(current: &str, releases_json: &str) -> Result<Option<NewVersion>> {
     Ok(releases
         .into_iter()
         .filter(|r| !r.draft)
-        .filter_map(|r| Version::parse(r.tag_name.trim_start_matches('v')).ok().map(|v| (v, r.html_url)))
-        .filter(|(v, _)| v > &current && (v.pre.is_empty() || !current.pre.is_empty()))
-        .max_by(|a, b| a.0.cmp(&b.0))
-        .map(|(v, url)| NewVersion { version: v.to_string(), url }))
+        .filter_map(|r| Version::parse(r.tag_name.trim_start_matches('v')).ok())
+        .filter(|v| v > &current && (v.pre.is_empty() || !current.pre.is_empty()))
+        .max()
+        .map(|v| NewVersion { version: v.to_string() }))
 }
 
 fn parse_error(what: &str, e: impl std::fmt::Display) -> Error {
@@ -76,7 +76,6 @@ mod tests {
     fn beta_users_get_the_newest_release() {
         let found = newest("0.1.0-beta.1", RELEASES).unwrap().unwrap();
         assert_eq!(found.version, "0.2.0-beta.1");
-        assert_eq!(found.url, "https://example.invalid/b1");
     }
 
     #[test]

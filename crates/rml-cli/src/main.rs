@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 
 use clap::{Parser, Subcommand};
 use rml_core::config::Config;
+use rml_core::lock::JobLock;
 use rml_core::paths::LauncherPaths;
 use rml_core::steam::{
     self, library, InstallEvent, InstallOptions, ReadyStatus, SteamClient, RUNEHAVEN_APPID,
@@ -247,8 +248,9 @@ fn steam_cmd(command: SteamCmd, launcher: &LauncherPaths) -> Result<()> {
             Ok(())
         }
         SteamCmd::Recover => {
+            let lock = JobLock::acquire(launcher)?;
             let client = ready_client(300)?;
-            match steam::recover_platform(&client, launcher)? {
+            match steam::recover_platform(&client, launcher, &lock)? {
                 Some(v) => println!("Restored Steam's platform to {v:?}."),
                 None => println!("Nothing to restore."),
             }
@@ -302,6 +304,7 @@ fn game_cmd(command: GameCmd, launcher: &LauncherPaths) -> Result<()> {
             ignore_other_downloads,
             hold_platform,
         } => {
+            let lock = JobLock::acquire(launcher)?;
             let client = ready_client(300)?;
             let opts = InstallOptions {
                 library_index: library,
@@ -321,7 +324,7 @@ fn game_cmd(command: GameCmd, launcher: &LauncherPaths) -> Result<()> {
             // Steam only writes progress into the manifest now and then, so the
             // numbers are unreliable; point to Steam's own download view instead.
             let mut announced = false;
-            let installed = steam::install(&client, launcher, &opts, &mut |event| match event {
+            let installed = steam::install(&client, launcher, &lock, &opts, &mut |event| match event {
                 InstallEvent::Progress { total, .. } => {
                     if !announced {
                         if total > 0 {
@@ -351,34 +354,38 @@ fn game_cmd(command: GameCmd, launcher: &LauncherPaths) -> Result<()> {
             Ok(())
         }
         GameCmd::Verify => {
+            let lock = JobLock::acquire(launcher)?;
             let client = ready_client(300)?;
-            let seen = steam::verify(&client, launcher, &InstallOptions::default(), &mut |e| eprintln!("{e:?}"))?;
+            let seen = steam::verify(&client, launcher, &lock, &InstallOptions::default(), &mut |e| eprintln!("{e:?}"))?;
             println!("{}", if seen { "Steam checked the files." } else { "Steam showed no sign of checking." });
             Ok(())
         }
         GameCmd::Move { library } => {
+            let lock = JobLock::acquire(launcher)?;
             let client = ready_client(300)?;
-            steam::move_game(&client, launcher, &InstallOptions::default(), library, &mut |e| eprintln!("{e:?}"))?;
+            steam::move_game(&client, launcher, &lock, &InstallOptions::default(), library, &mut |e| eprintln!("{e:?}"))?;
             println!("Runehaven is now in library {library}.");
             Ok(())
         }
         GameCmd::Uninstall => {
+            let lock = JobLock::acquire(launcher)?;
             let client = ready_client(300)?;
-            steam::uninstall(&client, launcher, &InstallOptions::default(), &mut |e| eprintln!("{e:?}"))?;
+            steam::uninstall(&client, launcher, &lock, &InstallOptions::default(), &mut |e| eprintln!("{e:?}"))?;
             println!("Runehaven was uninstalled.");
             Ok(())
         }
         GameCmd::Launch { dry_run, force, game_args } => {
+            let lock = if dry_run { None } else { Some(JobLock::acquire(launcher)?) };
             let (config, mut plan) = launch::prepare(launcher, force).map_err(|e| match e {
                 Error::GameNeedsUpdate => Error::Config(format!("{e} Or pass --force.")),
                 e => e,
             })?;
             plan.args.extend(game_args);
-            if dry_run {
+            let Some(lock) = lock else {
                 println!("{}", plan.describe());
                 return Ok(());
-            }
-            let (mut child, lock) = launch::start(&config, &plan, launcher, &mut print_start_event)?;
+            };
+            let mut child = launch::start(&config, &plan, launcher, &lock, &mut print_start_event)?;
             eprintln!(
                 "Runehaven started (Wine pid {}). Logs:\n  {}\n  {}",
                 child.id(),
@@ -389,7 +396,7 @@ fn game_cmd(command: GameCmd, launcher: &LauncherPaths) -> Result<()> {
                 context: "waiting for Wine".into(),
                 source: e,
             })?;
-            lock.release();
+            rml_core::lock::game_exited(launcher);
             eprintln!("Runehaven exited ({status}).");
             Ok(())
         }
@@ -407,6 +414,10 @@ fn print_start_event(event: launch::StartEvent) {
             eprintln!("Retina mode {}.", if on { "on" } else { "off" })
         }
         launch::StartEvent::InputFixPlaced => eprintln!("Placed the input fix next to the game."),
+        launch::StartEvent::ForeignDllMovedAside { to } => eprintln!(
+            "Another version.dll was in the game folder; it was copied to {}.",
+            to.display()
+        ),
         launch::StartEvent::BackupFailed { message } => {
             eprintln!("Could not back up the save games: {message}")
         }
@@ -444,6 +455,7 @@ fn runtime_cmd(command: RuntimeCmd, launcher: &LauncherPaths) -> Result<()> {
                 spec.id,
                 spec.download_size() >> 20
             );
+            let _lock = JobLock::acquire(launcher)?;
             let mut last_pct = u64::MAX;
             let go = std::sync::atomic::AtomicBool::new(false);
             let rt = runtime::install(&config, launcher, &spec, keep_downloads, &go, &mut |e| match e {
@@ -474,6 +486,7 @@ fn prefix_cmd(command: PrefixCmd, launcher: &LauncherPaths) -> Result<()> {
     let prefix = launch::prefix_path(&config, launcher);
     match command {
         PrefixCmd::Init => {
+            let _lock = JobLock::acquire(launcher)?;
             ensure_prefix(&config, launcher)?;
             println!("Prefix: {}", prefix.display());
             Ok(())
@@ -487,14 +500,14 @@ fn prefix_cmd(command: PrefixCmd, launcher: &LauncherPaths) -> Result<()> {
             Ok(())
         }
         PrefixCmd::Import { from_prefix } => {
-            launch::RunLock::acquire(launcher)?;
+            let _lock = JobLock::acquire(launcher)?;
             ensure_prefix(&config, launcher)?;
             let to = prefix::import_saves(&from_prefix, &prefix)?;
             println!("Copied save games to {}", to.display());
             import_settings(&from_prefix, &config, launcher, &prefix)
         }
         PrefixCmd::ImportSaves { from_prefix } => {
-            launch::RunLock::acquire(launcher)?;
+            let _lock = JobLock::acquire(launcher)?;
             ensure_prefix(&config, launcher)?;
             let to = prefix::import_saves(&from_prefix, &prefix)?;
             println!("Copied save games to {}", to.display());
@@ -518,7 +531,7 @@ fn prefix_cmd(command: PrefixCmd, launcher: &LauncherPaths) -> Result<()> {
             }
         }
         PrefixCmd::ImportSettings { from } => {
-            launch::RunLock::acquire(launcher)?;
+            let _lock = JobLock::acquire(launcher)?;
             ensure_prefix(&config, launcher)?;
             import_settings(&from, &config, launcher, &prefix)
         }

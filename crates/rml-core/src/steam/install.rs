@@ -16,6 +16,7 @@ use super::client::{SteamClient, Transport};
 use super::console::LogTail;
 use super::library::{self, AppManifest, Library};
 use crate::error::{Error, Result};
+use crate::lock::JobLock;
 use crate::paths::LauncherPaths;
 use crate::state::{LauncherState, PendingRestore};
 
@@ -90,17 +91,17 @@ pub struct Installed {
 pub fn recover_platform<T: Transport>(
     client: &SteamClient<T>,
     launcher: &LauncherPaths,
+    _lock: &JobLock,
 ) -> Result<Option<String>> {
-    let mut state = LauncherState::load(&launcher.state_file())?;
-    let Some(pending) = state.pending_platform_restore.clone() else {
+    let state = LauncherState::load(&launcher.state_file())?;
+    let Some(pending) = state.pending_platform_restore else {
         return Ok(None);
     };
     let value = pending.restore_value().to_string();
     if client.platform()? != value {
         client.set_platform(&value)?;
     }
-    state.pending_platform_restore = None;
-    state.save(&launcher.state_file())?;
+    LauncherState::update(&launcher.state_file(), |s| s.pending_platform_restore = None)?;
     Ok(Some(value))
 }
 
@@ -122,9 +123,7 @@ impl<T: Transport> PlatformGuard<'_, T> {
         });
         self.client.set_platform(&self.value)?;
         self.restored = true;
-        let mut state = LauncherState::load(&self.launcher.state_file())?;
-        state.pending_platform_restore = None;
-        state.save(&self.launcher.state_file())
+        LauncherState::update(&self.launcher.state_file(), |s| s.pending_platform_restore = None)
     }
 }
 
@@ -132,10 +131,11 @@ impl<T: Transport> PlatformGuard<'_, T> {
 pub fn install<T: Transport>(
     client: &SteamClient<T>,
     launcher: &LauncherPaths,
+    lock: &JobLock,
     opts: &InstallOptions,
     on_event: &mut dyn FnMut(InstallEvent),
 ) -> Result<Installed> {
-    recover_platform(client, launcher)?;
+    recover_platform(client, launcher, lock)?;
     let libs = library::libraries(&client.paths)?;
     if let Some((lib, manifest)) = library::find_app(&libs, opts.appid)? {
         if manifest.is_ready() {
@@ -167,9 +167,7 @@ pub fn install<T: Transport>(
         value: pending.restore_value().to_string(),
         restored: false,
     };
-    let mut state = LauncherState::load(&launcher.state_file())?;
-    state.pending_platform_restore = Some(pending);
-    state.save(&launcher.state_file())?;
+    LauncherState::update(&launcher.state_file(), |s| s.pending_platform_restore = Some(pending))?;
 
     on_event(InstallEvent::SwitchingPlatform);
     let result = client
@@ -192,10 +190,11 @@ pub fn install<T: Transport>(
 pub fn verify<T: Transport>(
     client: &SteamClient<T>,
     launcher: &LauncherPaths,
+    lock: &JobLock,
     opts: &InstallOptions,
     on_event: &mut dyn FnMut(InstallEvent),
 ) -> Result<bool> {
-    recover_platform(client, launcher)?;
+    recover_platform(client, launcher, lock)?;
     let libs = library::libraries(&client.paths)?;
     if library::find_app(&libs, opts.appid)?.is_none() {
         return Err(Error::GameNotInstalled);
@@ -207,9 +206,7 @@ pub fn verify<T: Transport>(
         value: pending.restore_value().to_string(),
         restored: false,
     };
-    let mut state = LauncherState::load(&launcher.state_file())?;
-    state.pending_platform_restore = Some(pending);
-    state.save(&launcher.state_file())?;
+    LauncherState::update(&launcher.state_file(), |s| s.pending_platform_restore = Some(pending))?;
 
     on_event(InstallEvent::SwitchingPlatform);
     let result = client
@@ -237,6 +234,7 @@ fn run_verify<T: Transport>(
     client.exec("app_start_validation", &[&id])?;
     on_event(InstallEvent::Requested);
     let start_line = format!("Start validating appID {id}");
+    let started_here = |log: &str| log.lines().any(|l| names_app(l, &start_line));
     let end_line = format!("AppID {id} scheduler finished : removed from schedule (result ");
     let started = Instant::now();
     let mut seen = false;
@@ -246,7 +244,7 @@ fn run_verify<T: Transport>(
             return Err(Error::Cancelled);
         }
         let log = tail.read_since_start()?;
-        if !seen && log.contains(&start_line) {
+        if !seen && started_here(&log) {
             seen = true;
             on_event(InstallEvent::JobPlanned);
         }
@@ -274,13 +272,14 @@ fn run_verify<T: Transport>(
 pub fn uninstall<T: Transport>(
     client: &SteamClient<T>,
     launcher: &LauncherPaths,
+    lock: &JobLock,
     opts: &InstallOptions,
     on_event: &mut dyn FnMut(InstallEvent),
 ) -> Result<()> {
-    recover_platform(client, launcher)?;
+    recover_platform(client, launcher, lock)?;
     let (lib, manifest) = library::find_app(&library::libraries(&client.paths)?, opts.appid)?
         .ok_or(Error::GameNotInstalled)?;
-    let game_dir = lib.steamapps().join("common").join(&manifest.installdir);
+    let game_dir = manifest.game_dir(&lib)?;
     let pending = PendingRestore::new(client.platform()?, "uninstalling Runehaven");
     let mut guard = PlatformGuard {
         client,
@@ -288,9 +287,7 @@ pub fn uninstall<T: Transport>(
         value: pending.restore_value().to_string(),
         restored: false,
     };
-    let mut state = LauncherState::load(&launcher.state_file())?;
-    state.pending_platform_restore = Some(pending);
-    state.save(&launcher.state_file())?;
+    LauncherState::update(&launcher.state_file(), |s| s.pending_platform_restore = Some(pending))?;
 
     on_event(InstallEvent::SwitchingPlatform);
     let result = client
@@ -310,11 +307,12 @@ pub fn uninstall<T: Transport>(
 pub fn move_game<T: Transport>(
     client: &SteamClient<T>,
     launcher: &LauncherPaths,
+    lock: &JobLock,
     opts: &InstallOptions,
     to_library: u32,
     on_event: &mut dyn FnMut(InstallEvent),
 ) -> Result<()> {
-    recover_platform(client, launcher)?;
+    recover_platform(client, launcher, lock)?;
     let libs = library::libraries(&client.paths)?;
     let (lib, manifest) = library::find_app(&libs, opts.appid)?.ok_or(Error::GameNotInstalled)?;
     if lib.index == to_library {
@@ -324,8 +322,8 @@ pub fn move_game<T: Transport>(
         .iter()
         .find(|l| l.index == to_library)
         .ok_or_else(|| Error::Config(format!("Steam has no library {to_library}.")))?;
-    let source = lib.steamapps().join("common").join(&manifest.installdir);
-    let target = target_lib.steamapps().join("common").join(&manifest.installdir);
+    let source = manifest.game_dir(&lib)?;
+    let target = manifest.game_dir(target_lib)?;
     // Steam refuses to move into an existing folder. One holding only the
     // launcher's own files is a leftover of an earlier move and can go.
     remove_leftovers(&target);
@@ -342,9 +340,7 @@ pub fn move_game<T: Transport>(
         value: pending.restore_value().to_string(),
         restored: false,
     };
-    let mut state = LauncherState::load(&launcher.state_file())?;
-    state.pending_platform_restore = Some(pending);
-    state.save(&launcher.state_file())?;
+    LauncherState::update(&launcher.state_file(), |s| s.pending_platform_restore = Some(pending))?;
 
     on_event(InstallEvent::SwitchingPlatform);
     let result = client
@@ -380,7 +376,7 @@ fn run_move<T: Transport>(
         if let Some(reason) = log.lines().find_map(|l| l.split_once(&canceled).map(|(_, r)| r.trim())) {
             return Err(Error::MoveFailed(reason.to_string()));
         }
-        let Some((_, after)) = log.split_once("Finished moving install folder") else {
+        let Some(after) = finished_move(&log, opts.appid) else {
             // A big game takes a while; Steam has said it started moving.
             let moving = log.contains(&format!("AppID {} moving from", opts.appid));
             let limit = if moving { opts.stall_timeout } else { opts.start_timeout };
@@ -410,19 +406,59 @@ fn run_move<T: Transport>(
 /// How long to wait for Steam's check after a move before calling it done.
 const MOVE_SETTLE: Duration = Duration::from_secs(20);
 
+/// Whether `line` contains `prefix` followed by the end of the app id, so
+/// that app 2676030 does not also match 26760301.
+fn names_app(line: &str, prefix: &str) -> bool {
+    line.match_indices(prefix).any(|(at, _)| {
+        !line[at + prefix.len()..].starts_with(|c: char| c.is_ascii_digit())
+    })
+}
+
+/// What Steam logged after it finished moving `appid`, if it has. Steam's
+/// "Finished moving" line has no app id, so it counts only when the last
+/// move Steam started before it was this app's.
+fn finished_move(log: &str, appid: u32) -> Option<&str> {
+    let ours = format!("AppID {appid} moving from");
+    let mut moving_ours = false;
+    let mut offset = 0;
+    for line in log.split_inclusive('\n') {
+        offset += line.len();
+        if line.contains(" moving from ") {
+            moving_ours = line.contains(&ours);
+        } else if moving_ours && line.contains("Finished moving install folder") {
+            return Some(&log[offset..]);
+        }
+    }
+    None
+}
+
 /// Files the launcher itself puts into the game folder, which Steam leaves
 /// behind on uninstall.
 const OWN_FILES: [&str; 2] = ["version.dll", ".DS_Store"];
 
-/// Deletes the game folder if nothing but the launcher's own files is left.
+/// Deletes the game folder if nothing is left in it but the launcher's input
+/// fix (and Finder's `.DS_Store`), all of them plain files. An empty folder,
+/// or one with anything else in it, stays.
 fn remove_leftovers(game_dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(game_dir) else {
         return;
     };
-    let names: Vec<_> = entries.flatten().map(|e| e.file_name()).collect();
-    if names.iter().all(|n| OWN_FILES.iter().any(|own| n == *own)) {
-        let _ = std::fs::remove_dir_all(game_dir);
+    let mut files = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else { return };
+        let plain = entry.file_type().is_ok_and(|t| t.is_file());
+        if !plain || !OWN_FILES.iter().any(|own| entry.file_name() == *own) {
+            return;
+        }
+        files.push(entry.path());
     }
+    if !files.iter().any(|f| f.ends_with(OWN_FILES[0])) {
+        return;
+    }
+    for file in &files {
+        let _ = std::fs::remove_file(file);
+    }
+    let _ = std::fs::remove_dir(game_dir);
 }
 
 fn run_uninstall<T: Transport>(
@@ -600,6 +636,10 @@ mod tests {
     use crate::steam::client::fake::client;
     use crate::steam::library::Library;
 
+    fn lock(launcher: &LauncherPaths) -> JobLock {
+        JobLock::acquire(launcher).unwrap()
+    }
+
     const READY: &str = "\"AppState\" { \"appid\" \"2676030\" \"name\" \"Runehaven\" \"StateFlags\" \"4\" \"installdir\" \"Runehaven\" \"buildid\" \"5\" \"TargetBuildID\" \"5\" }";
     const DOWNLOADING: &str = "\"AppState\" { \"appid\" \"2676030\" \"name\" \"Runehaven\" \"StateFlags\" \"1049862\" \"BytesToDownload\" \"100\" \"BytesDownloaded\" \"40\" }";
 
@@ -639,7 +679,7 @@ mod tests {
         }));
 
         let mut events = Vec::new();
-        let installed = install(&c, &launcher, &options(), &mut |e| events.push(e)).unwrap();
+        let installed = install(&c, &launcher, &lock(&launcher), &options(), &mut |e| events.push(e)).unwrap();
         assert!(!installed.already_installed);
         // Restored as soon as the job was planned, before the download finished.
         let pos = |want: fn(&InstallEvent) -> bool| events.iter().position(want).unwrap();
@@ -685,7 +725,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let c = client(tmp.path());
         let launcher = LauncherPaths::at(tmp.path().join("launcher"));
-        let err = install(&c, &launcher, &options(), &mut |_| {}).unwrap_err();
+        let err = install(&c, &launcher, &lock(&launcher), &options(), &mut |_| {}).unwrap_err();
         assert!(matches!(err, Error::InstallNotStarted(_)));
         assert_eq!(*c.transport.platform.borrow(), "macos");
     }
@@ -707,7 +747,7 @@ mod tests {
                 .replace("Runehaven", "Portal 2"),
         )
         .unwrap();
-        let err = install(&c, &launcher, &options(), &mut |_| {}).unwrap_err();
+        let err = install(&c, &launcher, &lock(&launcher), &options(), &mut |_| {}).unwrap_err();
         assert!(matches!(err, Error::OtherDownloadsActive(ref n) if n == "Portal 2"));
         assert!(c
             .transport
@@ -724,12 +764,12 @@ mod tests {
                 .replace("\"StateFlags\" \"4\"", "\"StateFlags\" \"1026\""),
         )
         .unwrap();
-        let err = install(&c, &launcher, &options(), &mut |_| {}).unwrap_err();
+        let err = install(&c, &launcher, &lock(&launcher), &options(), &mut |_| {}).unwrap_err();
         assert!(matches!(err, Error::InstallNotStarted(_)), "{err}");
 
         std::fs::write(main.manifest_path(RUNEHAVEN_APPID), READY).unwrap();
         assert!(
-            install(&c, &launcher, &options(), &mut |_| {})
+            install(&c, &launcher, &lock(&launcher), &options(), &mut |_| {})
                 .unwrap()
                 .already_installed
         );
@@ -761,7 +801,7 @@ mod tests {
             ..options()
         };
         let mut events = Vec::new();
-        install(&c, &launcher, &opts, &mut |e| events.push(e)).unwrap();
+        install(&c, &launcher, &lock(&launcher), &opts, &mut |e| events.push(e)).unwrap();
         let restore = events
             .iter()
             .position(|e| matches!(e, InstallEvent::RestoringPlatform { .. }))
@@ -782,7 +822,7 @@ mod tests {
         let opts = options();
         opts.cancel.store(true, Ordering::Relaxed);
         assert!(matches!(
-            install(&c, &launcher, &opts, &mut |_| {}),
+            install(&c, &launcher, &lock(&launcher), &opts, &mut |_| {}),
             Err(Error::Cancelled)
         ));
         assert_eq!(*c.transport.platform.borrow(), "macos");
@@ -805,11 +845,11 @@ mod tests {
         .save(&launcher.state_file())
         .unwrap();
         assert_eq!(
-            recover_platform(&c, &launcher).unwrap().as_deref(),
+            recover_platform(&c, &launcher, &lock(&launcher)).unwrap().as_deref(),
             Some("macos")
         );
         assert_eq!(*c.transport.platform.borrow(), "macos");
-        assert_eq!(recover_platform(&c, &launcher).unwrap(), None);
+        assert_eq!(recover_platform(&c, &launcher, &lock(&launcher)).unwrap(), None);
     }
 
     // Lines as Steam writes them to content_log.txt (from a real install on 16.10.2026).
@@ -870,7 +910,7 @@ mod tests {
         }));
 
         let mut events = Vec::new();
-        let installed = install(&c, &launcher, &options(), &mut |e| events.push(e)).unwrap();
+        let installed = install(&c, &launcher, &lock(&launcher), &options(), &mut |e| events.push(e)).unwrap();
         assert!(!installed.already_installed);
         assert!(!restored_early.load(Ordering::SeqCst), "switched back while Steam was still preparing");
         assert_eq!(*c.transport.platform.borrow(), "macos");
@@ -891,7 +931,7 @@ mod tests {
                 append(&log, "[x] AppID 2676030 scheduler finished : removed from schedule (result Disk write failure, state 0x6) \n");
             }
         }));
-        let err = install(&c, &launcher, &options(), &mut |_| {}).unwrap_err();
+        let err = install(&c, &launcher, &lock(&launcher), &options(), &mut |_| {}).unwrap_err();
         assert!(matches!(&err, Error::InstallFailedBecause(r) if r == "Disk write failure"), "{err}");
         assert_eq!(*c.transport.platform.borrow(), "macos", "restored after a failure too");
     }
@@ -916,7 +956,7 @@ mod tests {
                 std::fs::remove_file(&m).unwrap();
             }
         }));
-        uninstall(&c, &launcher, &options(), &mut |_| {}).unwrap();
+        uninstall(&c, &launcher, &lock(&launcher), &options(), &mut |_| {}).unwrap();
         assert!(!game.exists());
         assert_eq!(*c.transport.platform.borrow(), "macos");
     }
@@ -928,6 +968,30 @@ mod tests {
         std::fs::write(tmp.path().join("my-mod.txt"), "keep me").unwrap();
         remove_leftovers(tmp.path());
         assert!(tmp.path().join("my-mod.txt").exists());
+
+        // An empty folder, or only a folder called version.dll, is not ours.
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        remove_leftovers(&empty);
+        assert!(empty.exists());
+        let odd = tmp.path().join("odd");
+        std::fs::create_dir_all(odd.join("version.dll")).unwrap();
+        remove_leftovers(&odd);
+        assert!(odd.join("version.dll").is_dir());
+    }
+
+    #[test]
+    fn log_lines_belong_to_the_exact_app() {
+        let start = "Start validating appID 2676030";
+        assert!(names_app("[x] Start validating appID 2676030", start));
+        assert!(names_app("[x] Start validating appID 2676030 (files)", start));
+        assert!(!names_app("[x] Start validating appID 26760301", start));
+
+        let ours = "[x] AppID 2676030 moving from \"a\" to \"b\"\n[x] Finished moving install folder (1 bytes)\nrest\n";
+        assert_eq!(finished_move(ours, 2676030), Some("rest\n"));
+        let other = "[x] AppID 2676030 moving from \"a\" to \"b\"\n[x] AppID 440 moving from \"c\" to \"d\"\n[x] Finished moving install folder (1 bytes)\n";
+        assert_eq!(finished_move(other, 2676030), None, "another game's move finished");
+        assert_eq!(finished_move("[x] Finished moving install folder\n", 2676030), None);
     }
 
     #[test]
@@ -962,7 +1026,7 @@ mod tests {
             }
         }));
         let mut events = Vec::new();
-        move_game(&c, &launcher, &options(), 1, &mut |e| events.push(e)).unwrap();
+        move_game(&c, &launcher, &lock(&launcher), &options(), 1, &mut |e| events.push(e)).unwrap();
         assert!(second.manifest_path(RUNEHAVEN_APPID).exists());
         assert_eq!(*c.transport.platform.borrow(), "macos");
         assert_eq!(c.transport.sent.borrow().iter().filter(|a| a.starts_with("+app_move 2676030 1")).count(), 1);
@@ -996,7 +1060,7 @@ mod tests {
             }
         }));
         let started = Instant::now();
-        let err = move_game(&c, &launcher, &options(), 1, &mut |_| {}).unwrap_err();
+        let err = move_game(&c, &launcher, &lock(&launcher), &options(), 1, &mut |_| {}).unwrap_err();
         assert!(matches!(&err, Error::MoveFailed(r) if r == "Not enough disk space"), "{err}");
         assert!(started.elapsed() < Duration::from_secs(1), "reported without waiting");
         assert!(!leftover.exists(), "the old leftover was cleared before the move");
