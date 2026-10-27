@@ -4,7 +4,7 @@
  * Loading under this name is what gets the input fix into the game process
  * (UnityPlayer.dll imports VERSION.dll).
  *
- * Part of the Runehaven Launcher (unofficial) – MIT License.
+ * Part of RML – Runehaven Mac Launcher (unofficial). GPL-3.0-or-later, see LICENSE and NOTICE.md.
  */
 #include <windows.h>
 

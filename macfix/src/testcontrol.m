@@ -20,7 +20,7 @@
  *
  * Example: echo "click 0.5 0.6" | nc -U /tmp/rml-test-501.sock
  *
- * Part of RML – Runehaven Mac Launcher (unofficial). MIT License.
+ * Part of RML – Runehaven Mac Launcher (unofficial). GPL-3.0-or-later, see LICENSE and NOTICE.md.
  */
 #import <Foundation/Foundation.h>
 #include <CoreGraphics/CoreGraphics.h>

@@ -27,7 +27,7 @@
  *              RHL_INPUTFIX_RAW=0 turns off the raw mouse corrections,
  *              RHL_INPUTFIX_TRACE=1 (with logging) records every mouse message.
  *
- * Part of the Runehaven Launcher (unofficial) – MIT License.
+ * Part of RML – Runehaven Mac Launcher (unofficial). GPL-3.0-or-later, see LICENSE and NOTICE.md.
  */
 #include <windows.h>
 #include <stdarg.h>

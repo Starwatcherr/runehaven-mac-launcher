@@ -1,4 +1,4 @@
-/* Runehaven Launcher input fix – shared declarations. MIT License. */
+/* RML input fix – shared declarations. GPL-3.0-or-later, see LICENSE and NOTICE.md. */
 #pragma once
 #include <windows.h>
 

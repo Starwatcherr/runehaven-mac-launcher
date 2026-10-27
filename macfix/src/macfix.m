@@ -18,7 +18,7 @@
  * see dlls/winemac.drv/cocoa_app.m). Only the game's process is touched
  * (RML_GAME_PROCESS).
  *
- * Part of RML – Runehaven Mac Launcher (unofficial). MIT License.
+ * Part of RML – Runehaven Mac Launcher (unofficial). GPL-3.0-or-later, see LICENSE and NOTICE.md.
  */
 #import <Foundation/Foundation.h>
 #import <ColorSync/ColorSync.h>
