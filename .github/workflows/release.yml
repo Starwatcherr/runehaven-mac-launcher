@@ -60,6 +60,10 @@ jobs:
       - run: cargo test --workspace --locked
       - name: Build the app and the DMG
         working-directory: crates/rml-app
+        # Tauri skips laying out the DMG window (icon positions, size) on CI;
+        # this keeps it, so the DMG looks the same as a local build.
+        env:
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
         run: cargo tauri build --bundles app,dmg -- --locked
       - name: Collect the files and their checksums
         run: |
