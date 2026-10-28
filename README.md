@@ -71,7 +71,12 @@ They live in the launcher's Wine setup: `~/Library/Application Support/Runehaven
 
 ## Problems and bug reports
 
-**Settings → Debug → Export** puts everything a bug report needs (logs of the last starts, crash reports, a system check, the settings) into one ZIP on your desktop. Please attach it when you report a problem. Problems with Runehaven itself also happen on Windows; those go to the game's developers.
+Please report problems with the launcher as a [GitHub issue](https://github.com/Starwatcherr/runehaven-mac-launcher/issues), not in the Runehaven Discord. A Discord server for the launcher is coming soon.
+
+1. In the launcher, click **Settings → Debug → Logs → Export**. It puts everything a bug report needs (logs of the last starts, crash reports, a system check, the settings) into one ZIP on your desktop. Your home folder shows up as `~`, and memory dumps of crashes are left out.
+2. Open a [new issue](https://github.com/Starwatcherr/runehaven-mac-launcher/issues/new), describe what happened and what you expected, and attach the ZIP.
+
+Problems with Runehaven itself also happen on Windows; those go to the game's developer.
 
 ## How it works
 
