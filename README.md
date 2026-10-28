@@ -29,6 +29,10 @@ Play the Windows version of [Runehaven](https://store.steampowered.com/app/26760
    - Click **Done** in the warning.
    - Open **System Settings → Privacy & Security**, scroll down to the message about Runehaven Mac Launcher and click **Open Anyway**.
    - Confirm with your password. From then on the app opens normally.
+   - If the app only keeps bouncing in the Dock and no window opens, macOS could not finish its online check of the app (some networks block it). Force-quit it (right-click in the Dock), run this once in Terminal and open it again:
+     ```
+     xattr -dr com.apple.quarantine "/Applications/Runehaven Mac Launcher.app"
+     ```
 
 ## First start
 
