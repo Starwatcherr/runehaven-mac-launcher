@@ -29,10 +29,23 @@ Play the Windows version of [Runehaven](https://store.steampowered.com/app/26760
    - Click **Done** in the warning.
    - Open **System Settings → Privacy & Security**, scroll down to the message about Runehaven Mac Launcher and click **Open Anyway**.
    - Confirm with your password. From then on the app opens normally.
-   - If the app only keeps bouncing in the Dock and no window opens, macOS could not finish its online check of the app (some networks block it). Force-quit it (right-click in the Dock), run this once in Terminal and open it again:
-     ```
-     xattr -dr com.apple.quarantine "/Applications/Runehaven Mac Launcher.app"
-     ```
+   - If the app only keeps bouncing in the Dock and no window opens, see [The app only bounces in the Dock](#the-app-only-bounces-in-the-dock).
+
+### The app only bounces in the Dock
+
+This happened once in testing and was not caused by the launcher: macOS's own security check for downloaded apps (the `syspolicyd` service) had got stuck, so macOS held every newly downloaded app at its start.
+
+1. Force-quit the launcher (right-click its icon in the Dock → Force Quit).
+2. **Restart your Mac** and open the launcher again. That restarts the stuck service and is all it takes.
+3. Without restarting, Terminal does the same (it asks for your password):
+   ```
+   sudo killall syspolicyd
+   ```
+   macOS starts the service again by itself right away.
+4. Only if that does not help: this removes the "downloaded from the internet" mark from the launcher, so macOS skips its first-start check for this one app:
+   ```
+   xattr -dr com.apple.quarantine "/Applications/Runehaven Mac Launcher.app"
+   ```
 
 ## First start
 
