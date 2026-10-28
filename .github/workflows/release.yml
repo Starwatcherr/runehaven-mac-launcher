@@ -64,7 +64,9 @@ jobs:
       - name: Collect the files and their checksums
         run: |
           mkdir dist
-          cp target/release/bundle/dmg/*.dmg dist/
+          # A name without spaces: GitHub would turn them into dots on upload,
+          # and SHA256SUMS.txt must name the file as players download it.
+          cp target/release/bundle/dmg/*.dmg "dist/Runehaven-Mac-Launcher_${GITHUB_REF_NAME#v}_aarch64.dmg"
           cp inputfix/build/version.dll macfix/build/app/rml-macfix.dylib dist/
           cd dist && shasum -a 256 * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

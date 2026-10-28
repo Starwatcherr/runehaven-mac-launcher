@@ -23,7 +23,7 @@ Play the Windows version of [Runehaven](https://store.steampowered.com/app/26760
 
 ## Install
 
-1. Download `Runehaven Mac Launcher_<version>_aarch64.dmg` from [Releases](../../releases).
+1. Download `Runehaven-Mac-Launcher_<version>_aarch64.dmg` from [Releases](../../releases).
 2. Open it and drag **Runehaven Mac Launcher** into **Applications**.
 3. Open the app. Because the beta is not notarized by Apple, macOS stops it the first time:
    - Click **Done** in the warning.
