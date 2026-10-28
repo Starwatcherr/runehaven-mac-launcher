@@ -203,6 +203,10 @@ pub struct Timing {
     /// Pause after starting Steam before the first command is sent.
     pub start_grace: Duration,
     pub probe_interval: Duration,
+    /// While Steam does not answer and its log stays quiet (it updates
+    /// itself or waits for a login), it is asked only this often. Every
+    /// command briefly shows Steam's helper program in the Dock.
+    pub quiet_probe_interval: Duration,
     /// How long to wait for one command's answer.
     pub answer_timeout: Duration,
     /// The answer counts as complete once the log has been quiet this long.
@@ -216,6 +220,7 @@ impl Default for Timing {
             ready_timeout: Duration::from_secs(300),
             start_grace: Duration::from_secs(8),
             probe_interval: Duration::from_secs(4),
+            quiet_probe_interval: Duration::from_secs(30),
             answer_timeout: Duration::from_secs(6),
             settle: Duration::from_millis(500),
             poll: Duration::from_millis(100),
@@ -379,30 +384,44 @@ impl<T: Transport> SteamClient<T> {
             sleep(self.timing.start_grace);
         }
 
+        // When the last unanswered question went out, and the size of
+        // Steam's log after it.
+        let mut last_probe: Option<(Instant, u64)> = None;
+        let log_size = || std::fs::metadata(self.console_log()).map_or(0, |m| m.len());
         loop {
             if cancelled() {
                 return Err(Error::Interrupted);
             }
-            if self.transport.accepts_commands() && self.console_log().is_file() {
+            // Ask again soon only when Steam's log shows it doing something.
+            let due = last_probe.is_none_or(|(at, size)| {
+                at.elapsed() >= self.timing.quiet_probe_interval
+                    || (log_size() != size && at.elapsed() >= self.timing.probe_interval)
+            });
+            if due && self.transport.accepts_commands() && self.console_log().is_file() {
                 match self.platform() {
                     Ok(_) => {
                         on_status(ReadyStatus::Ready);
                         return Ok(());
                     }
-                    Err(Error::NoResponse(_) | Error::LogRotated | Error::PlatformUnreadable) => {}
+                    Err(Error::NoResponse(_) | Error::LogRotated | Error::PlatformUnreadable) => {
+                        last_probe = Some((Instant::now(), log_size()));
+                    }
                     Err(other) => return Err(other),
                 }
             }
             if started.elapsed() > timeout {
-                return Err(Error::SteamNotReady {
-                    secs: timeout.as_secs(),
-                    hint: "Steam is running but does not answer. Is it updating or waiting for you to log in?".into(),
-                });
+                let hint = if self.transport.accepts_commands() {
+                    "Steam is running but does not answer. Is it updating or waiting for you to log in?"
+                } else {
+                    // Steam makes its command pipe only when it starts.
+                    "Steam is running but does not accept commands. Quit Steam completely and try again"
+                };
+                return Err(Error::SteamNotReady { secs: timeout.as_secs(), hint: hint.into() });
             }
             on_status(ReadyStatus::WaitingForAnswer {
                 elapsed_secs: elapsed(),
             });
-            sleep(self.timing.probe_interval);
+            sleep(self.timing.probe_interval.min(Duration::from_secs(1)));
         }
     }
 }
@@ -516,6 +535,7 @@ pub(crate) mod fake {
             ready_timeout: Duration::from_secs(5),
             start_grace: Duration::from_millis(10),
             probe_interval: Duration::from_millis(10),
+            quiet_probe_interval: Duration::from_millis(50),
             answer_timeout: Duration::from_millis(300),
             settle: Duration::from_millis(30),
             poll: Duration::from_millis(5),
@@ -600,6 +620,20 @@ mod tests {
             .iter()
             .any(|s| matches!(s, ReadyStatus::WaitingForAnswer { .. })));
         assert_eq!(seen.last(), Some(&ReadyStatus::Ready));
+    }
+
+    #[test]
+    fn a_quiet_steam_is_asked_rarely() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = client(tmp.path());
+        c.timing.ready_timeout = Duration::from_millis(1500);
+        c.timing.answer_timeout = Duration::from_millis(50);
+        c.timing.quiet_probe_interval = Duration::from_millis(500);
+        *c.transport.deaf_for.borrow_mut() = 1000;
+        assert!(c.wait_ready(&mut |_| {}).is_err());
+        // Every 10 ms as before would be about 25 questions.
+        let asked = c.transport.sent.borrow().len();
+        assert!((2..=5).contains(&asked), "asked {asked} times");
     }
 
     #[test]
