@@ -36,13 +36,12 @@ Play the Windows version of [Runehaven](https://store.steampowered.com/app/26760
 This happened once in testing and was not caused by the launcher: macOS's own security check for downloaded apps (the `syspolicyd` service) had got stuck, so macOS held every newly downloaded app at its start.
 
 1. Force-quit the launcher (right-click its icon in the Dock → Force Quit).
-2. **Restart your Mac** and open the launcher again. That restarts the stuck service and is all it takes.
-3. Without restarting, Terminal does the same (it asks for your password):
+2. Restart the stuck service in Terminal (it asks for your password), then open the launcher again. This is what fixed it in testing:
    ```
    sudo killall syspolicyd
    ```
-   macOS starts the service again by itself right away.
-4. Only if that does not help: this removes the "downloaded from the internet" mark from the launcher, so macOS skips its first-start check for this one app:
+   macOS starts the service again by itself right away. Restarting your Mac should do the same.
+3. Only if that does not help: this removes the "downloaded from the internet" mark from the launcher, so macOS skips its first-start check for this one app:
    ```
    xattr -dr com.apple.quarantine "/Applications/Runehaven Mac Launcher.app"
    ```
