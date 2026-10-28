@@ -469,10 +469,11 @@ fn run_uninstall<T: Transport>(
     client.exec("app_uninstall", &[&opts.appid.to_string()])?;
     on_event(InstallEvent::Requested);
     let started = Instant::now();
+    let mut unreadable = None;
     loop {
         sleep(opts.poll);
         // Steam deletes the manifest once the files are gone.
-        if library::find_app(&library::libraries(&client.paths)?, opts.appid)?.is_none() {
+        if find_while_steam_writes(client, opts.appid, &mut unreadable)?.is_some_and(|f| f.is_none()) {
             return Ok(());
         }
         if started.elapsed() > opts.start_timeout {
@@ -481,6 +482,28 @@ fn run_uninstall<T: Transport>(
                 opts.start_timeout.as_secs()
             )));
         }
+    }
+}
+
+/// How long Steam's files may stay unreadable while a job waits on them.
+const UNREADABLE_PATIENCE: Duration = Duration::from_secs(30);
+
+/// The app's library and manifest while a job runs. Steam rewrites the
+/// manifest now and then, and a read can catch it half written; that gives
+/// `Ok(None)` (try again on the next round) unless the files have been
+/// unreadable for [`UNREADABLE_PATIENCE`] since `failing_since`.
+fn find_while_steam_writes<T: Transport>(
+    client: &SteamClient<T>,
+    appid: u32,
+    failing_since: &mut Option<Instant>,
+) -> Result<Option<Option<(Library, AppManifest)>>> {
+    match library::libraries(&client.paths).and_then(|libs| library::find_app(&libs, appid)) {
+        Ok(found) => {
+            *failing_since = None;
+            Ok(Some(found))
+        }
+        Err(e) if failing_since.get_or_insert_with(Instant::now).elapsed() > UNREADABLE_PATIENCE => Err(e),
+        Err(_) => Ok(None),
     }
 }
 
@@ -548,6 +571,7 @@ fn run_install<T: Transport>(
     let mut planned = false;
     let mut failure: Option<(String, Instant)> = None;
     let mut last_progress = (0u64, Instant::now());
+    let mut unreadable = None;
     loop {
         sleep(opts.poll);
         if opts.cancel.load(Ordering::Relaxed) {
@@ -558,8 +582,9 @@ fn run_install<T: Transport>(
             .and_then(|t| t.read_since_start().ok())
             .map(|log| content_signals(&log, opts.appid))
             .unwrap_or_default();
-        let libs = library::libraries(&client.paths)?;
-        let found = library::find_app(&libs, opts.appid)?;
+        let Some(found) = find_while_steam_writes(client, opts.appid, &mut unreadable)? else {
+            continue;
+        };
 
         // Only once the download runs is the platform no longer needed:
         // switched back while Steam still prepares, Steam suspends the job.
@@ -718,6 +743,28 @@ mod tests {
             .position(|a| a == "+app_install 2676030 -")
             .unwrap();
         assert!(switch < request);
+    }
+
+    #[test]
+    fn a_half_written_manifest_is_read_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let c = client(tmp.path());
+        let launcher = LauncherPaths::at(tmp.path().join("launcher"));
+        let manifest = Library { index: 0, path: c.paths.data_dir.clone() }.manifest_path(RUNEHAVEN_APPID);
+        let m = manifest.clone();
+        *c.transport.on_command.borrow_mut() = Some(Box::new(move |arg: &str| {
+            if arg.starts_with("+app_install") {
+                std::fs::write(&m, DOWNLOADING).unwrap();
+                let m2 = m.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(100));
+                    std::fs::write(&m2, &DOWNLOADING[..10]).unwrap();
+                    std::thread::sleep(Duration::from_millis(200));
+                    std::fs::write(&m2, READY).unwrap();
+                });
+            }
+        }));
+        install(&c, &launcher, &lock(&launcher), &options(), &mut |_| {}).unwrap();
     }
 
     #[test]
