@@ -320,33 +320,38 @@ pub fn open_saves(what: String) -> Result<(), String> {
     std::process::Command::new("/usr/bin/open").arg(&dir).status().map(|_| ()).map_err(|e| e.to_string())
 }
 
-/// Quits the app and moves it to the Trash once it has quit. If moving is
-/// not possible, Finder shows the app so it can be dragged there. In a
-/// development build (not an `.app`) it only quits.
+/// Moves the app to the Trash and quits. If macOS does not let it move
+/// itself (in a standard account, an app in Applications needs an
+/// administrator), Finder shows the app, the error says to drag it to the
+/// Trash, and the app stays open. In a development build (not an `.app`) it
+/// only quits.
 #[tauri::command]
-pub fn quit_and_trash(app: AppHandle) {
+pub fn quit_and_trash(app: AppHandle) -> Result<(), String> {
     let bundle = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(PathBuf::from));
-    if let (Some(bundle), Some(home)) = (bundle, std::env::var_os("HOME")) {
-        let name = bundle.file_stem().unwrap_or_default().to_string_lossy().into_owned();
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let target = PathBuf::from(home).join(".Trash").join(format!("{name} {stamp}.app"));
-        let _ = std::process::Command::new("/bin/sh")
-            .args([
-                "-c",
-                r#"while /bin/kill -0 "$1" 2>/dev/null; do /bin/sleep 0.3; done; /bin/mv "$2" "$3" || /usr/bin/open -R "$2""#,
-                "sh",
-                &std::process::id().to_string(),
-            ])
-            .arg(&bundle)
-            .arg(&target)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+    if let Some(bundle) = bundle {
+        if !move_to_trash(&bundle) {
+            let _ = std::process::Command::new("/usr/bin/open").arg("-R").arg(&bundle).status();
+            return Err(
+                "The launcher could not move itself to the Trash, sorry. Please quit it and drag the app to the Trash; Finder shows it."
+                    .into(),
+            );
+        }
     }
     app.exit(0);
+    Ok(())
+}
+
+/// Moves a file to the Trash the way Finder does (NSFileManager), so it can
+/// be put back from there. A running app can be moved; it keeps running.
+fn move_to_trash(path: &std::path::Path) -> bool {
+    const SCRIPT: &str = "function run(argv) { ObjC.import('Foundation'); \
+        return $.NSFileManager.defaultManager.trashItemAtURLResultingItemURLError(\
+        $.NSURL.fileURLWithPath(argv[0]), null, null); }";
+    std::process::Command::new("/usr/bin/osascript")
+        .args(["-l", "JavaScript", "-e", SCRIPT])
+        .arg(path)
+        .output()
+        .is_ok_and(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true")
 }

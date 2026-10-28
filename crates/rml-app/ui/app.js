@@ -67,8 +67,8 @@ function renderList() {
     const w = work[r.id];
     const failed = w?.failed !== undefined || r.state === "failed";
     const getSteam = r.id === "steam" && r.state === "missing";
-    const text = w?.failed ?? w?.detail ?? r.detail;
-    const kind = w?.detail !== undefined ? "working" : failed ? "failed" : r.state;
+    const text = w?.failed ?? w?.detail ?? (w?.done ? "Done" : r.detail);
+    const kind = w?.detail !== undefined ? "working" : failed ? "failed" : w?.done ? "ok" : r.state;
     li.querySelector(".name").textContent = r.name;
     const detail = li.querySelector(".detail");
     const shown = `${text}|${getSteam}`;
@@ -118,8 +118,10 @@ async function refresh() {
   checking = true;
   try {
     reqs = await invoke("requirements");
-    // A requirement that is fine now no longer shows why it failed earlier.
+    // A requirement that is fine now no longer shows why it failed earlier,
+    // and the fresh check replaces "Done".
     for (const r of reqs) if (r.state === "ok") delete work[r.id];
+    if (!installing) for (const id in work) if (work[id].done) delete work[id];
   } catch (e) {
     say(String(e), true);
   } finally {
@@ -158,12 +160,13 @@ list.addEventListener("click", e => {
 listen("setup", ({ payload: e }) => {
   switch (e.kind) {
     case "working": work[e.id] = { detail: e.detail }; progress = e.progress; break;
-    case "done": delete work[e.id]; progress = null; break;
+    // Shown as done right away; the check after the whole run confirms it.
+    case "done": work[e.id] = { done: true }; progress = null; break;
     case "failed": work[e.id] = { failed: e.message }; break;
     case "finished":
       installing = cancelling = false;
       progress = null;
-      for (const id in work) if (work[id].failed === undefined) delete work[id];
+      for (const id in work) if (work[id].failed === undefined && !work[id].done) delete work[id];
       refresh();
       break;
   }

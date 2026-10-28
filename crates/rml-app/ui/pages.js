@@ -157,21 +157,34 @@
     $("un-runtime").textContent = "WineCX, DXMT, libraries and downloads" + (status.runtime.bytes ? ` · ${fmtSize(status.runtime.bytes)}` : "");
     setChoice("runtime", true, false);
     if (status.own_prefix) {
-      $("un-prefix").textContent = "Your save games are packed onto the desktop first" + (status.prefix.bytes ? ` · ${fmtSize(status.prefix.bytes)}` : "");
+      $("un-prefix").textContent = "Save games, settings and Windows files" + (status.prefix.bytes ? ` · ${fmtSize(status.prefix.bytes)}` : "");
       setChoice("prefix", true, false);
     } else {
       $("un-prefix").textContent = "Your own Wine setup is never removed.";
       setChoice("prefix", false, true);
     }
+    setChoice("saves", true, false);
+    updateSaves();
     $("un-game").textContent = status.game.installed ? `Uninstalled through Steam · ${fmtSize(status.game.bytes)}` : "Not installed.";
     setChoice("game", false, !status.game.installed);
     $("un-ok").disabled = $("un-cancel").disabled = false;
+    $("un-cancel").textContent = "Cancel";
     unDialog.hidden = false;
     $("un-cancel").focus();
   }
 
+  // Exporting the save games only matters when the Wine setup goes.
+  function updateSaves() {
+    const goes = choice("prefix").getAttribute("aria-checked") === "true";
+    choice("saves").disabled = !goes;
+    $("un-saves").textContent = goes
+      ? "As a ZIP on your desktop, before the Wine setup is removed."
+      : "They stay in the Wine setup.";
+  }
+
   unDialog.querySelectorAll("[data-choice]").forEach(t => t.addEventListener("click", () => {
     if (!t.disabled && !unRunning) t.setAttribute("aria-checked", String(t.getAttribute("aria-checked") !== "true"));
+    updateSaves();
   }));
   $("un-cancel").addEventListener("click", () => { if (!unRunning) unDialog.hidden = true; });
   document.addEventListener("keydown", e => { if (e.key === "Escape" && !unDialog.hidden && !unRunning) unDialog.hidden = true; });
@@ -183,14 +196,24 @@
     setJob(true);
     $("un-ok").disabled = $("un-cancel").disabled = true;
     unNote.textContent = "Starting…";
-    invoke("uninstall_launcher", { choice: { runtime: on("runtime"), prefix: on("prefix"), logs: on("logs") }, game: on("game") });
+    invoke("uninstall_launcher", {
+      choice: { runtime: on("runtime"), prefix: on("prefix"), keep_saves: on("saves"), logs: on("logs") },
+      game: on("game"),
+    });
   });
 
   function uninstallProgress(e) {
     if (e.kind === "working") { unNote.textContent = e.detail; return; }
     if (e.kind === "done") {
       unNote.textContent = `${e.detail} The launcher closes now.`;
-      setTimeout(() => invoke("quit_and_trash"), 3000);
+      setTimeout(() => invoke("quit_and_trash").catch(err => {
+        // The app could not move itself; Finder now shows it.
+        unNote.textContent = `${e.detail} ${err}`;
+        $("un-cancel").textContent = "Close";
+        $("un-cancel").disabled = false;
+        unRunning = false;
+        setJob(false);
+      }), 3000);
       return;
     }
     unRunning = false;

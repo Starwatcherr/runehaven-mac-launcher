@@ -194,19 +194,33 @@ fn old_prefixes(launcher: &LauncherPaths) -> Vec<(String, PathBuf)> {
 }
 
 /// What goes away together with the launcher. Its settings always do.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 pub struct UninstallChoice {
     /// The downloaded Wine runtime (WineCX, DXMT, libraries) and downloads.
     pub runtime: bool,
-    /// The launcher's own Wine prefix and its backups; save games are packed
-    /// first. A prefix chosen in the settings is never touched.
+    /// The launcher's own Wine prefix and its backups. A prefix chosen in
+    /// the settings is never touched.
     pub prefix: bool,
+    /// With `prefix`: pack the save games into a ZIP first (the default).
+    #[serde(default = "yes")]
+    pub keep_saves: bool,
     pub logs: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for UninstallChoice {
+    fn default() -> Self {
+        Self { runtime: false, prefix: false, keep_saves: true, logs: false }
+    }
 }
 
 /// Removes what the launcher put onto the Mac, as chosen, plus its settings
 /// and its input fix in the game folder. Returns the ZIP with the save games
-/// (also those of earlier setups in `backups/`) when the prefix was removed.
+/// (also those of earlier setups in `backups/`) when the prefix was removed
+/// and they were to be kept.
 /// `config` must be the real settings, not a default for a file that could
 /// not be read: it decides which prefix is the launcher's own. The app
 /// itself is not touched here.
@@ -226,7 +240,9 @@ pub fn uninstall_launcher(
     let mut zip = None;
     let mut doomed = Vec::new();
     if choice.prefix && config.prefix.is_none() {
-        zip = pack_saves(config, launcher, saves_dest, true)?;
+        if choice.keep_saves {
+            zip = pack_saves(config, launcher, saves_dest, true)?;
+        }
         doomed.extend([launcher.prefix(), launcher.root.join("backups")]);
     }
     if choice.runtime {
@@ -324,7 +340,7 @@ mod tests {
         let launcher = LauncherPaths::at(tmp.path().join("launcher"));
         save_in(&launcher.prefix(), "crossover", "now");
         save_in(&launcher.root.join("backups/prefix-20261001T100000Z"), "crossover", "before");
-        let choice = UninstallChoice { runtime: false, prefix: true, logs: false };
+        let choice = UninstallChoice { runtime: false, prefix: true, keep_saves: true, logs: false };
         let desktop = tmp.path().join("desktop");
         let zip = uninstall_launcher(&Config::default(), &launcher, &lock(&launcher), choice, &desktop)
             .unwrap()
@@ -385,16 +401,28 @@ mod tests {
         let desktop = tmp.path().join("desktop");
 
         // Keep the runtime: settings go, the runtime stays.
-        let keep_runtime = UninstallChoice { runtime: false, prefix: true, logs: true };
+        let keep_runtime = UninstallChoice { runtime: false, prefix: true, keep_saves: true, logs: true };
         let zip = uninstall_launcher(&Config::default(), &launcher, &lock(&launcher), keep_runtime, &desktop).unwrap();
         assert!(zip.is_some_and(|z| z.exists()));
         assert!(!launcher.prefix().exists() && !launcher.logs().exists() && !launcher.config_file().exists());
         assert!(launcher.runtime().exists());
 
         // Everything: the folder is gone.
-        let all = UninstallChoice { runtime: true, prefix: true, logs: true };
+        let all = UninstallChoice { runtime: true, prefix: true, keep_saves: true, logs: true };
         uninstall_launcher(&Config::default(), &launcher, &lock(&launcher), all, &desktop).unwrap();
         assert!(!launcher.root.exists());
+    }
+
+    #[test]
+    fn uninstalling_without_keeping_the_saves_makes_no_zip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let launcher = LauncherPaths::at(tmp.path().join("launcher"));
+        save_in(&launcher.prefix(), "crossover", "progress");
+        let choice = UninstallChoice { runtime: false, prefix: true, keep_saves: false, logs: false };
+        let desktop = tmp.path().join("desktop");
+        let zip = uninstall_launcher(&Config::default(), &launcher, &lock(&launcher), choice, &desktop).unwrap();
+        assert!(zip.is_none() && !desktop.exists());
+        assert!(!launcher.prefix().exists());
     }
 
     #[test]
@@ -406,7 +434,7 @@ mod tests {
             ..Default::default()
         };
         state.save(&launcher.state_file()).unwrap();
-        let all = UninstallChoice { runtime: true, prefix: true, logs: true };
+        let all = UninstallChoice { runtime: true, prefix: true, keep_saves: true, logs: true };
         assert!(uninstall_launcher(&Config::default(), &launcher, &lock(&launcher), all, tmp.path()).is_err());
         assert!(launcher.state_file().exists());
     }
