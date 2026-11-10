@@ -8,6 +8,8 @@ Play the Windows version of [Runehaven](https://store.steampowered.com/app/26760
 
 **Status:** beta. It works on the developer's Mac; please report anything that does not work for you.
 
+**Discord:** questions, bug reports and ideas are welcome on the [launcher's Discord server](https://discord.gg/KdsDfrHW2Q).
+
 ## What it does
 
 - Installs everything Runehaven needs with one button: Rosetta 2, the Windows version of the game through your own Steam, and a Wine runtime with DXMT (Direct3D 11 → Metal).
@@ -71,10 +73,10 @@ They live in the launcher's Wine setup: `~/Library/Application Support/Runehaven
 
 ## Problems and bug reports
 
-Please report problems with the launcher as a [GitHub issue](https://github.com/Starwatcherr/runehaven-mac-launcher/issues), not in the Runehaven Discord. A Discord server for the launcher is coming soon.
+Please report problems with the launcher in `#bugs` on the [launcher's Discord server](https://discord.gg/KdsDfrHW2Q) or as a [GitHub issue](https://github.com/Starwatcherr/runehaven-mac-launcher/issues), not in the Runehaven Discord.
 
 1. In the launcher, click **Settings → Debug → Logs → Export**. It puts everything a bug report needs (logs of the last starts, crash reports, a system check, the settings) into one ZIP on your desktop. Your home folder shows up as `~`, and memory dumps of crashes are left out.
-2. Open a [new issue](https://github.com/Starwatcherr/runehaven-mac-launcher/issues/new), describe what happened and what you expected, and attach the ZIP.
+2. Create a post in `#bugs` or open a [new issue](https://github.com/Starwatcherr/runehaven-mac-launcher/issues/new), describe what happened and what you expected, and attach the ZIP.
 
 Problems with Runehaven itself also happen on Windows; those go to the game's developer.
 
